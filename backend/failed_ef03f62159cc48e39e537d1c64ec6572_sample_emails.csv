@@ -1,0 +1,10 @@
+email,regex,mx,smtp,status
+invalid-email,invalid,-,-,Invalid
+user@invalid_domain,invalid,-,-,Invalid
+noatsymbol.com,invalid,-,-,Invalid
+bad-email@,invalid,-,-,Invalid
+@missinguser.com,invalid,-,-,Invalid
+test@example.com,valid,invalid,-,Invalid
+valid.email@outlook.com,valid,valid,invalid,Invalid
+john.doe@gmail.com,valid,valid,invalid,Invalid
+user123@yahoo.com,valid,valid,invalid,Invalid

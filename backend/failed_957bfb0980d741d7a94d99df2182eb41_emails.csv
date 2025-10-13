@@ -1,0 +1,5 @@
+email,regex,mx,smtp,status
+invalid-email,invalid,-,-,Invalid
+no@mxnodomain.zz,valid,invalid,-,Invalid
+test@example.com,valid,invalid,-,Invalid
+valid@gmail.com,valid,valid,invalid,Invalid
