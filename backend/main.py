@@ -1,137 +1,155 @@
 from fastapi import FastAPI, UploadFile, File, Form, APIRouter, Depends, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-import csv, os, time, json, socket, smtplib, dns.resolver
-from typing import List, Dict, Optional
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from pydantic import BaseModel, Field
+import csv, os, time
+from typing import List, Dict, Optional, Literal
 from sqlalchemy.ext.asyncio import AsyncSession
-from database import engine
+from db import engine
 from sqlalchemy.future import select
-from models import EmailRecord, Base
-from validator.regex_check import is_valid_regex
-from db import init_models, get_db, SessionLocal
+from models import EmailRecord, Base, User, CreditHistory, ValidationTask
+from db import get_db
 from config import DATABASE_URL
+
+# Validator mode: "fast" (default) or "strict"
+VALIDATOR_MODE = os.getenv("VALIDATOR_MODE", "fast").lower()
+
+if VALIDATOR_MODE == "strict":
+    # Import STRICT validator (4-stage gated pipeline)
+    from validator.strict_validator import (
+        StrictEmailValidator as AsyncEmailValidator,
+        get_strict_validator as get_validator,
+        validate_email_strict as validate_email_async,
+        validate_bulk_strict as validate_bulk_async,
+        validate_syntax as check_syntax_func,
+    )
+    from validator.fast_validator import (
+        check_disposable_fast as check_disposable,
+        check_blacklist_fast as check_blacklist,
+        check_role_fast as is_role_based
+    )
+    def check_syntax_fast(email):
+        status, reason, local, domain = check_syntax_func(email)
+        return status == "valid", reason, local, domain
+    print("INFO: Using STRICT validator (4-stage gated pipeline)")
+else:
+    # Import FAST validator (10+ emails/sec)
+    from validator.fast_validator import (
+        FastEmailValidator as AsyncEmailValidator, 
+        get_fast_validator as get_validator, 
+        validate_email_fast as validate_email_async, 
+        validate_bulk_fast as validate_bulk_async,
+        check_syntax_fast,
+        check_disposable_fast as check_disposable,
+        check_blacklist_fast as check_blacklist,
+        check_role_fast as is_role_based
+    )
+    print("INFO: Using FAST validator (optimized for speed)")
+
 from contextlib import asynccontextmanager
 from uuid import uuid4
-from sqlalchemy import func, case, text
+from sqlalchemy import func, case
 import bcrypt
-from models import User
-from passlib.context import CryptContext
 from signup import router as signup_router
 from jose import jwt
-from db import get_db
 from datetime import datetime, timedelta
 from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError
-from config import DATABASE_URL
-from collections import defaultdict
-from routes import credits
-from pydantic import BaseModel, Field
-from typing import Literal, Optional
-from uuid import uuid4
-from datetime import datetime
 
-print("💡 Using DATABASE_URL:", DATABASE_URL)
+print("DEBUG: Using DATABASE_URL:", DATABASE_URL)
 
 router = APIRouter()
 
+# Global async validator instance
+_async_validator: Optional[AsyncEmailValidator] = None
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    print("✅ Tables synced with database.")
+    global _async_validator
+    try:
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        print("SUCCESS: Tables synced with database.")
+        
+        # Initialize async validator with warm-up
+        _async_validator = AsyncEmailValidator()
+        await _async_validator.initialize()
+        print("SUCCESS: Async email validator initialized with warm-up.")
+    except Exception as e:
+        print(f"ERROR during startup: {e}")
     yield
-    print("🔻 Shutting down app.")
+    # Cleanup on shutdown
+    if _async_validator:
+        await _async_validator.cleanup()
+    print("Shutting down app.")
 
 app = FastAPI(lifespan=lifespan)
 
-# CORS
+# Get frontend URL from environment variable for production
+FRONTEND_URL = os.getenv("FRONTEND_URL", "")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:5174",
+        "http://127.0.0.1:5174",
+        FRONTEND_URL,  # Production frontend URL from environment
+        "*"  # Allow all origins for initial deployment (tighten after testing)
+    ] if FRONTEND_URL else [
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:5174",
+        "http://127.0.0.1:5174",
+        "*"  # Development: allow all
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 # Constants
-SOCKET_TIMEOUT = 6
-THREAD_POOL_SIZE = 50
-BATCH_SIZE = 200
+BATCH_SIZE = 250  # Optimized batch size for async processing
 
 @app.get("/")
 def read_root():
-    return {"message": "Email Validator Backend is running"}
+    return {"message": "Email Validator Backend is running (High-Performance Async Mode)"}
 
 # ======================= Email Validation Core =======================
 
-def has_mx_record(domain: str, timeout: int = SOCKET_TIMEOUT) -> str:
-    try:
-        resolver = dns.resolver.Resolver()
-        resolver.timeout = timeout
-        resolver.lifetime = timeout
-        answers = resolver.resolve(domain, 'MX')
-        return str(answers[0].exchange).rstrip('.') if answers else None
-    except Exception:
-        return None
-
-def verify_smtp(email: str, mx_host: str, timeout: int = SOCKET_TIMEOUT) -> bool:
-    try:
-        socket.setdefaulttimeout(timeout)
-        with smtplib.SMTP(mx_host, 25, timeout=timeout) as server:
-            server.helo("example.com")
-            server.mail("test@example.com")
-            code, _ = server.rcpt(email)
-            return code == 250 or code == 251
-    except Exception:
-        return False
-
-def validate_email_detailed(email: str) -> Dict[str, str]:
-    email = email.strip()
-    result = {"email": email}
-
-    if not is_valid_regex(email):
-        result.update({
-            "regex": "invalid", "mx": "-", "smtp": "-", "status": "Invalid"
-        })
-        return result
-
-    result["regex"] = "valid"
-    domain = email.split('@')[-1]
-    mx_host = has_mx_record(domain)
-    if not mx_host:
-        result.update({
-            "mx": "invalid", "smtp": "-", "status": "Invalid"
-        })
-        return result
-
-    result["mx"] = "valid"
-    smtp_valid = verify_smtp(email, mx_host)
-    result["smtp"] = "valid" if smtp_valid else "invalid"
-    result["status"] = "Valid" if smtp_valid else "Invalid"
-    return result
-
-def process_emails_in_batches(emails: List[str]):
-    results, failed_emails = [], []
+async def process_emails_async(emails: List[str], batch_id: str = None, validation_type: str = "individual"):
+    """
+    High-performance async email validation.
+    Uses the new AsyncEmailValidator with connection pooling, caching, and bounded concurrency.
+    """
+    global _async_validator
+    
+    # Ensure validator is initialized
+    if _async_validator is None:
+        _async_validator = await get_validator()
+    
+    start_time = time.time()
+    
+    if validation_type == "bulk" or len(emails) > 1:
+        # Use bulk validation for multiple emails
+        results = await _async_validator.validate_bulk(emails, batch_id)
+    else:
+        # Single email validation
+        result = await _async_validator.validate_email(emails[0])
+        if batch_id:
+            result["batch_id"] = batch_id
+        results = [result]
+    
+    elapsed = time.time() - start_time
+    print(f"PERF: Validated {len(emails)} emails in {elapsed:.2f}s ({len(emails)/max(elapsed, 0.001):.1f} emails/sec)")
+    
     total = len(emails)
-    valid = invalid = 0
-
-    for i in range(0, total, BATCH_SIZE):
-        batch = emails[i:i + BATCH_SIZE]
-        with ThreadPoolExecutor(max_workers=THREAD_POOL_SIZE) as executor:
-            future_to_email = {executor.submit(validate_email_detailed, email): email for email in batch}
-            for future in as_completed(future_to_email):
-                try:
-                    result = future.result()
-                    results.append(result)
-                    if result.get("status") == "Valid":
-                        valid += 1
-                    else:
-                        invalid += 1
-                        failed_emails.append(result["email"])
-                except Exception:
-                    invalid += 1
+    # Reoon-style statuses: 'safe' and 'role' are valid emails
+    valid = sum(1 for r in results if r.get("status") in ("safe", "role", "Valid"))
+    invalid = total - valid
+    failed_emails = [r.get("email") for r in results if r.get("status") not in ("safe", "role", "Valid")]
+    
     return results, total, valid, invalid, failed_emails
 
 # ======================= Models =======================
@@ -140,22 +158,38 @@ class LoginData(BaseModel):
     email: str
     password: str
 
-class SingleEmailInput(BaseModel):
-    email: str
-
 class BlockData(BaseModel):
     id: int
     blocked: bool
 
 class AddCreditsRequest(BaseModel):
     user_id: int
-    credits: int = Field(..., gt=0, description="Number of credits to add")
+    credits: int = Field(..., gt=0)
 
 class UserUpdate(BaseModel):
     id: int
     email: str
     role: str
     status: str
+
+class BuyCreditsRequest(BaseModel):
+    credits: int = Field(..., gt=0)
+    price: float = Field(..., gt=0)
+    user_id: int
+    plan: Literal["instant", "monthly"] = "instant"
+    package_name: Optional[str] = None
+
+class SubscriptionRequest(BaseModel):
+    credits_per_day: int = Field(..., gt=0)
+    monthly_cost: float = Field(..., gt=0)
+    discount: int = Field(default=0, ge=0, le=100)
+
+class UserProfileUpdate(BaseModel):
+    name: Optional[str] = None
+    email: Optional[str] = None
+    current_password: Optional[str] = None
+    new_password: Optional[str] = None
+
 
 # ======================= Auth =======================
 
@@ -164,40 +198,11 @@ def verify_password(plain_password, hashed_password):
 
 SECRET_KEY = "aisha-negi"
 ALGORITHM = "HS256"
-
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
 
 def create_token(user_id: int):
-    payload = {
-        "sub": str(user_id),
-        "exp": datetime.utcnow() + timedelta(hours=24)
-    }
+    payload = {"sub": str(user_id), "exp": datetime.utcnow() + timedelta(hours=24)}
     return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
-
-# ======================= User Routes =======================
-
-@app.post("/login")
-async def login(data: LoginData, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(User).where(User.email == data.email))
-    user = result.scalar_one_or_none()
-
-    if not user or not bcrypt.checkpw(data.password.encode(), user.hashed_password.encode()):
-        raise HTTPException(status_code=401, detail="Invalid credentials")
-    if user.status != "active":
-        raise HTTPException(status_code=403, detail="Account is not activated.")
-    if user.blocked:
-        raise HTTPException(status_code=403, detail="Account is blocked.")
-
-    token = create_token(user.id)
-
-    return {
-        "message": "Login successful",
-        "id": user.id,
-        "email": user.email,
-        "role": user.role,
-        "token": token,
-        "credits": user.credits
-    }
 
 async def get_current_user(token: str = Depends(oauth2_scheme), db: AsyncSession = Depends(get_db)):
     try:
@@ -213,41 +218,93 @@ async def get_current_user(token: str = Depends(oauth2_scheme), db: AsyncSession
     except JWTError:
         raise HTTPException(status_code=401, detail="Token decode error")
 
-@app.get("/user/records")
-async def get_user_records(
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
-):
-    try:
-        result = await db.execute(
-            select(EmailRecord).where(EmailRecord.user_id == current_user.id)
-        )
-        records = result.scalars().all()
-        return [record.to_dict() for record in records]
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+# ======================= User Routes =======================
 
-@app.get("/user/all-emails")
-async def get_all_emails_for_user(
+@app.post("/login")
+async def login(data: LoginData, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(User).where(User.email == data.email))
+    user = result.scalar_one_or_none()
+    if not user or not bcrypt.checkpw(data.password.encode(), user.hashed_password.encode()):
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+    if user.status != "active":
+        raise HTTPException(status_code=403, detail="Account is not activated.")
+    if user.blocked:
+        raise HTTPException(status_code=403, detail="Account is blocked.")
+    token = create_token(user.id)
+    return {
+        "message": "Login successful",
+        "id": user.id,
+        "email": user.email,
+        "name": user.name,
+        "role": user.role,
+        "token": token,
+        "credits": user.credits
+    }
+
+@app.get("/user/credits")
+async def get_user_credits(current_user: User = Depends(get_current_user)):
+    return {"credits": current_user.credits, "email": current_user.email, "name": current_user.name}
+
+@app.get("/user/records")
+async def get_user_records(current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(EmailRecord).where(EmailRecord.user_id == current_user.id))
+    records = result.scalars().all()
+    return [record.to_dict() for record in records]
+
+@app.put("/user/profile")
+async def update_user_profile(
+    data: UserProfileUpdate,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    result = await db.execute(
-        select(EmailRecord).where(EmailRecord.user_id == current_user.id)
-    )
-    records = result.scalars().all()
-    return [r.to_dict() for r in records]
+    """Update user profile information (name, email, password)"""
+    try:
+        # If changing password, verify current password first
+        if data.new_password:
+            if not data.current_password:
+                raise HTTPException(status_code=400, detail="Current password is required to change password")
+            
+            if not bcrypt.checkpw(data.current_password.encode(), current_user.hashed_password.encode()):
+                raise HTTPException(status_code=401, detail="Current password is incorrect")
+            
+            # Hash the new password
+            hashed_new_password = bcrypt.hashpw(data.new_password.encode(), bcrypt.gensalt()).decode()
+            current_user.hashed_password = hashed_new_password
+        
+        # Update name if provided
+        if data.name:
+            current_user.name = data.name
+        
+        # Update email if provided and check uniqueness
+        if data.email and data.email != current_user.email:
+            # Check if email already exists
+            result = await db.execute(select(User).where(User.email == data.email))
+            existing_user = result.scalar_one_or_none()
+            if existing_user:
+                raise HTTPException(status_code=400, detail="Email already in use")
+            current_user.email = data.email
+        
+        await db.commit()
+        await db.refresh(current_user)
+        
+        return {
+            "message": "Profile updated successfully",
+            "user": {
+                "id": current_user.id,
+                "name": current_user.name,
+                "email": current_user.email,
+                "role": current_user.role,
+                "credits": current_user.credits
+            }
+        }
+    except HTTPException as http_exc:
+        raise http_exc
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(status_code=500, detail=f"Error updating profile: {str(e)}")
 
-# ✅ Get user credits
-@app.get("/user/credits")
-async def get_user_credits(current_user: User = Depends(get_current_user)):
-    return {
-        "credits": current_user.credits,
-        "email": current_user.email,
-        "name": current_user.name
-    }
 
-# ======================= Email Validation with Credits =======================
+# ======================= Email Validation =======================
 
 @app.post("/validate-emails/")
 async def validate_emails(
@@ -256,177 +313,305 @@ async def validate_emails(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
+    print(f"BULK validation requested by {current_user.email}")
     start_time = time.time()
     response_payload = []
-
+    batch_id = uuid4().hex
     try:
-        # === Single Email Validation ===
         if email:
-            print(f"🔍 Credits BEFORE: {current_user.credits}")
-            
-            # ✅ Check credits
-            if current_user.credits < 1:
-                raise HTTPException(status_code=403, detail="Insufficient credits. Please purchase more credits.")
-            
-            results, total, valid, invalid, _ = process_emails_in_batches([email])
-            
-            # ✅ Deduct 1 credit
-            current_user.credits -= 1
-            print(f"🔍 Credits AFTER: {current_user.credits}")
-            
-            for result in results:
-                db.add(EmailRecord(
-                    email=result["email"],
-                    regex=result["regex"],
-                    mx=result["mx"],
-                    smtp=result["smtp"],
-                    status=result["status"],
-                    created_at=datetime.utcnow(),
-                    user_id=current_user.id
-                ))
-            await db.commit()
-            print(f"✅ Credits committed to DB")
+            # Re-direct to single validation logic if email is provided here
+            return await validate_single_email(email=email, db=db, current_user=current_user)
 
-            return {
-                "email": results[0]["email"],
-                "is_valid": results[0]["status"] == "Valid",
-                "regex": results[0]["regex"],
-                "mx": results[0]["mx"],
-                "smtp": results[0]["smtp"],
-                "reason": results[0]["status"],
-                "execution_time": round(time.time() - start_time, 2),
-                "credits_remaining": current_user.credits
-            }
-
-        # === File Upload Validation ===
         if files:
             for file in files:
                 contents = await file.read()
-                lines = contents.decode().splitlines()
-
+                lines = contents.decode(errors='ignore').splitlines()
                 try:
                     reader = csv.DictReader(lines)
                     emails = [row.get('email', '').strip() for row in reader if row.get('email')]
+                    if not emails:
+                         emails = [line.strip() for line in lines if line.strip()]
                 except Exception:
                     emails = [line.strip() for line in lines if line.strip()]
 
-                print(f"🔍 File: {file.filename}, Emails: {len(emails)}, Credits BEFORE: {current_user.credits}")
+                # REQ 15: Automatically remove duplicate emails
+                emails = list(dict.fromkeys([e.lower() for e in emails if e]))
+                
+                if not emails:
+                    continue
 
-                # ✅ Check if user has enough credits
                 if current_user.credits < len(emails):
                     raise HTTPException(
                         status_code=403, 
-                        detail=f"Insufficient credits. Need {len(emails)}, have {current_user.credits}"
+                        detail=f"Insufficient credits. You need {len(emails)} credits for this file, but only have {current_user.credits}."
                     )
 
-                results, total, valid, invalid, failed_emails = process_emails_in_batches(emails)
+                # REQ 22: Cache / Deduplicate against DB if needed (Optional but suggested)
+                # For now, we process all provided unique emails.
 
-                # ✅ Deduct credits (1 per email)
-                current_user.credits -= len(emails)
-                print(f"🔍 Credits AFTER deducting {len(emails)}: {current_user.credits}")
+                results, total, valid, invalid, _ = await process_emails_async(emails, batch_id=batch_id, validation_type="bulk")
+                
+                # REQ: Deduct only for non-error results
+                successful_results = [r for r in results if r.get("status") not in ["Error", "Unknown"]]
+                deduction_count = len(successful_results)
+                
+                if deduction_count > 0:
+                    current_user.credits -= deduction_count
+                    db.add(CreditHistory(
+                        user_id=current_user.id,
+                        reason=f"Bulk Verification - {file.filename}",
+                        credits_change_instant=-deduction_count,
+                        balance_after_instant=current_user.credits
+                    ))
+                else:
+                    print(f"DEBUG: No credits deducted for {file.filename} as all validations failed.")
 
                 for result in results:
                     db.add(EmailRecord(
-                        email=result["email"],
-                        regex=result["regex"],
-                        mx=result["mx"],
-                        smtp=result["smtp"],
+                        email=result["email"], 
+                        regex=result.get("regex", "N/A"), 
+                        mx=result.get("mx", "N/A"),
+                        smtp=result.get("smtp", "N/A"), 
                         status=result["status"],
-                        created_at=datetime.utcnow(),
+                        created_at=datetime.utcnow(), 
                         user_id=current_user.id
                     ))
-                await db.commit()
-                print(f"✅ File validation committed to DB")
+                
+                # Calculate detailed category counts for visualization
+                # Each email is evaluated against ALL parameters independently
+                safe_count = 0
+                role_count = 0
+                catch_all_count = 0
+                disposable_count = 0
+                inbox_full_count = 0
+                spam_trap_count = 0
+                disabled_count = 0
+                invalid_count = 0
+                unknown_count = 0
+                
+                for r in results:
+                    status = r.get("status", "Unknown")
+                    
+                    # Count each parameter independently using the boolean flags
+                    # These are NOT mutually exclusive - an email can match multiple categories
+                    
+                    # Disposable
+                    if r.get("is_disposable", False):
+                        disposable_count += 1
+                    
+                    # Catch-All
+                    if r.get("is_catch_all", False):
+                        catch_all_count += 1
+                    
+                    # Inbox Full
+                    if r.get("is_inbox_full", False):
+                        inbox_full_count += 1
+                    
+                    # Disabled
+                    if r.get("is_disabled", False):
+                        disabled_count += 1
+                    
+                    # Spam Trap (Blacklisted)
+                    if r.get("is_blacklisted", False):
+                        spam_trap_count += 1
+                    
+                    # Unknown (SMTP inconclusive)
+                    if r.get("is_unknown", False):
+                        unknown_count += 1
+                    
+                    # Valid emails - count as Safe or Role (Reoon-style)
+                    if status in ("safe", "role", "Valid"):
+                        if r.get("is_role_based", False):
+                            role_count += 1
+                        else:
+                            safe_count += 1
+                    # Invalid emails (not counted in specific categories above)
+                    elif status == "invalid":  # Fixed: lowercase to match validator output
+                        # Only count as generic invalid if not already counted in a specific category
+                        # This is for emails that failed for other reasons (syntax, domain, MX, SMTP mailbox not found, etc.)
+                        if not any([
+                            r.get("is_disposable", False),
+                            r.get("is_catch_all", False),
+                            r.get("is_inbox_full", False),
+                            r.get("is_disabled", False),
+                            r.get("is_blacklisted", False),
+                            r.get("is_unknown", False)
+                        ]):
+                            invalid_count += 1
 
-                unique_id = uuid4().hex
-                validated_filename = f"validated_{unique_id}_{file.filename}"
-                failed_filename = f"failed_{unique_id}_{file.filename}"
-
-                validated_rows = [r for r in results if r["status"] == "Valid"]
-                failed_rows = [r for r in results if r["status"] != "Valid"]
-
+                
+                
+                validated_filename = f"validated_{batch_id}_{file.filename}"
+                # Save results to a file for download
                 with open(validated_filename, 'w', newline='') as f:
-                    writer = csv.DictWriter(f, fieldnames=['email', 'regex', 'mx', 'smtp', 'status'])
+                    writer = csv.DictWriter(f, fieldnames=['email', 'syntax_valid', 'domain_exists', 'mx_record_exists', 'role_based', 'disposable', 'smtp_valid', 'blacklist', 'catch_all', 'status', 'verdict'])
                     writer.writeheader()
-                    writer.writerows(validated_rows)
-
-                if failed_rows:
-                    with open(failed_filename, 'w', newline='') as f:
-                        writer = csv.DictWriter(f, fieldnames=['email', 'regex', 'mx', 'smtp', 'status'])
-                        writer.writeheader()
-                        writer.writerows(failed_rows)
+                    # Include all results in the output file
+                    writer.writerows([
+                        {
+                            "email": r["email"], 
+                            "syntax_valid": r.get("syntax_valid", False),
+                            "domain_exists": r.get("domain_valid", False),
+                            "mx_record_exists": r.get("mx_valid", False),
+                            "role_based": r.get("role_based", "No"),
+                            "disposable": r.get("disposable", "No"),
+                            "smtp_valid": r.get("smtp_status", "not_checked"),
+                            "blacklist": "Yes" if r.get("status") == "Invalid" and r.get("reason") == "Blacklisted domain" else "No",
+                            "catch_all": r.get("catch_all", False),
+                            "status": r["status"],
+                            "verdict": r["status"]
+                        } for r in results
+                    ])
 
                 response_payload.append({
-                    "file": file.filename,
-                    "total": total,
-                    "valid": valid,
-                    "invalid": invalid,
-                    "execution_time": round(time.time() - start_time, 2),
+                    "file": file.filename, "total": total, "valid": valid, "invalid": invalid,
+                    "safe": safe_count,
+                    "role": role_count,
+                    "catch_all": catch_all_count,
+                    "disposable": disposable_count,
+                    "inbox_full": inbox_full_count,
+                    "spam_trap": spam_trap_count,
+                    "disabled": disabled_count,
+                    "unknown": unknown_count,
                     "validated_download": f"/download/{validated_filename}",
-                    "failed_download": f"/download/{failed_filename}" if failed_rows else None,
-                    "credits_used": len(emails),
-                    "credits_remaining": current_user.credits
+                    "credits_remaining": current_user.credits,
+                    "batch_id": batch_id
                 })
+                
+                # Save validation task to database for history
+                validation_task = ValidationTask(
+                    task_id=batch_id,
+                    user_id=current_user.id,
+                    filename=file.filename,
+                    status="Completed",
+                    total_emails=total,
+                    progress=100,
+                    safe_count=safe_count,
+                    role_count=role_count,
+                    catch_all_count=catch_all_count,
+                    disposable_count=disposable_count,
+                    inbox_full_count=inbox_full_count,
+                    spam_trap_count=spam_trap_count,
+                    disabled_count=disabled_count,
+                    invalid_count=invalid_count,
+                    unknown_count=unknown_count,
+                    download_url=f"/download/{validated_filename}",
+                    completed_at=datetime.utcnow()
+                )
+                db.add(validation_task)
+            
+            await db.commit()
+            return {"message": "Validation completed", "results": response_payload}
 
-        if not email and not files:
-            raise HTTPException(status_code=400, detail="Either 'email' or 'files' must be provided.")
-
-        return {
-            "message": "Validation completed",
-            "time_taken_seconds": round(time.time() - start_time, 2),
-            "results": response_payload,
-            "credits_remaining": current_user.credits
-        }
-
+        return {"message": "No data provided", "results": []}
+    except HTTPException as http_exc:
+        # Re-raise HTTP exceptions as-is
+        raise http_exc
     except Exception as e:
         await db.rollback()
-        print("❌ Validation Error:", e)
-        raise HTTPException(status_code=500, detail=f"Validation failed: {str(e)}")
+        import traceback
+        error_details = traceback.format_exc()
+        print(f"ERROR: BULK VALIDATION ERROR: {e}")
+        print(f"ERROR TRACEBACK:\n{error_details}")
+        raise HTTPException(status_code=500, detail=f"Validation error: {str(e)}")
 
 @app.post("/validate-single-email/")
-async def validate_single_email_route(
+async def validate_single_email(
     email: str = Form(...),
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user)
 ):
-    print(f"🔍 SINGLE EMAIL - Credits BEFORE: {user.credits}")
-    
+    """Validate a single email with credit deduction and history logging"""
+    print(f"DEBUG: Single validation for {email} by {current_user.email}")
     start_time = time.time()
+    email = email.strip().lower()
     
-    # ✅ Check credits
-    if user.credits < 1:
-        raise HTTPException(status_code=403, detail="Insufficient credits")
-    
-    results, total, valid, invalid, _ = process_emails_in_batches([email])
-    execution_time = round(time.time() - start_time, 2)
+    try:
+        if current_user.credits < 1:
+            raise HTTPException(status_code=403, detail="Insufficient credits. Please top up your account.")
+        
+        # REQ 22: Cache check - BYPASSED AS PER USER REQUEST (Always real-time)
+        # result = await db.execute(select(EmailRecord).where(EmailRecord.email == email).order_by(EmailRecord.created_at.desc()))
+        # cached_record = result.scalars().first()
+        
+        # if cached_record and (datetime.utcnow() - cached_record.created_at).total_seconds() < 86400:
+        #     print(f"DEBUG: Using cached result for {email}")
+        #     # Ensure we return standardized strings even from cache
+        #     return {
+        #         "email": cached_record.email,
+        #         "is_valid": cached_record.status == "Valid",
+        #         "status": cached_record.status,
+        #         "regex": cached_record.regex if cached_record.regex else "Valid",
+        #         "mx": cached_record.mx if cached_record.mx else "Valid",
+        #         "smtp": cached_record.smtp if cached_record.smtp else "Valid",
+        #         "disposable": "No", # Cache doesn't store these yet, providing safe defaults
+        #         "role_based": "No",
+        #         "score": 0,
+        #         "grade": "N/A",
+        #         "credits_remaining": current_user.credits,
+        #         "cached": True
+        #     }
 
-    # ✅ Deduct credit
-    user.credits -= 1
-    print(f"🔍 SINGLE EMAIL - Credits AFTER: {user.credits}")
-
-    for result in results:
-        db.add(EmailRecord(
-            email=result["email"],
-            regex=result["regex"],
-            mx=result["mx"],
-            smtp=result["smtp"],
-            status=result["status"],
-            created_at=datetime.utcnow(),
-            user_id=user.id  
-        ))
-    await db.commit()
-    print(f"✅ SINGLE EMAIL - Credits committed to DB")
-
-    return {
-        "email": results[0]["email"],
-        "is_valid": results[0]["status"] == "Valid",
-        "regex": results[0]["regex"],
-        "mx": results[0]["mx"],
-        "smtp": results[0]["smtp"],
-        "status": results[0]["status"],
-        "time_taken": execution_time,
-        "credits_remaining": user.credits
-    }
+        # No cache, call VerifyKit
+        results, total, valid, invalid, _ = await process_emails_async([email], validation_type="individual")
+        
+        # Deduct credit only if successful
+        if results[0].get("status") not in ["Error", "Unknown"]:
+            current_user.credits -= 1
+            # Log to history
+            db.add(CreditHistory(
+                user_id=current_user.id,
+                reason=f"Single Email Verification - {email}",
+                credits_change_instant=-1,
+                balance_after_instant=current_user.credits
+            ))
+        else:
+            print(f"DEBUG: No credit deducted for {email} due to validation error.")
+        
+        # Save email record
+        for result in results:
+            db.add(EmailRecord(
+                email=result["email"], 
+                regex=result.get("regex"),
+                mx=result.get("mx"),
+                smtp=result.get("smtp"),
+                status=result["status"],
+                created_at=datetime.utcnow(), 
+                user_id=current_user.id
+            ))
+        
+        await db.commit()
+        print(f"SUCCESS: Validation successful for {email}")
+        
+        resp = {
+            "email": results[0]["email"],
+            "is_valid": results[0]["status"] in ("safe", "role", "Valid"),
+            "status": results[0]["status"],
+            "reason": results[0].get("reason", "N/A"),
+            "syntax_valid": results[0].get("syntax_valid", "Not Valid"),
+            "domain_valid": results[0].get("domain_valid", "Not Valid"),
+            "mx_valid": results[0].get("mx_record_exists", "Not Valid"),
+            "smtp_status": results[0].get("smtp_status", "N/A"),
+            "disposable": results[0].get("disposable", "No"),
+            "role_based": results[0].get("role_based", "No"),
+            "catch_all": results[0].get("catch_all", "No"),
+            "score": results[0].get("deliverability_score", 0),
+            "grade": results[0].get("quality_grade", "N/A"),
+            "time_taken": round(time.time() - start_time, 2),
+            "credits_remaining": current_user.credits,
+            # Keys expected by frontend
+            "regex": results[0].get("syntax_valid", "Not Valid"),
+            "mx": results[0].get("mx_record_exists", "Not Valid"),
+            "smtp": results[0].get("smtp_valid", "Not Valid")
+        }
+        print(f"DEBUG: Final Response to Frontend: {resp}")
+        return resp
+    except Exception as e:
+        await db.rollback()
+        import traceback
+        traceback.print_exc()
+        print(f"ERROR: VALIDATION ERROR: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/download/{filename}")
 def download_file(filename: str):
@@ -435,445 +620,331 @@ def download_file(filename: str):
         return FileResponse(path=file_path, media_type='text/csv', filename=filename)
     raise HTTPException(status_code=404, detail="File not found")
 
-# ======================= Admin & Stats Routes =======================
+@app.get("/download-valid/{filename}")
+def download_valid_emails(filename: str):
+    """Download CSV file containing only valid emails (Safe and Role-based)"""
+    file_path = os.path.join(".", filename)
+    if not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail="File not found")
+    
+    # Create filtered CSV with only valid emails
+    valid_filename = filename.replace("validated_", "valid_only_")
+    valid_file_path = os.path.join(".", valid_filename)
+    
+    try:
+        with open(file_path, 'r', newline='', encoding='utf-8') as infile:
+            reader = csv.DictReader(infile)
+            fieldnames = reader.fieldnames
+            
+            # Filter for valid emails (Reoon-style: safe, role)
+            valid_rows = [row for row in reader if row.get('status') in ('safe', 'role', 'Valid')]
+            
+            # Write filtered data to new file
+            with open(valid_file_path, 'w', newline='', encoding='utf-8') as outfile:
+                writer = csv.DictWriter(outfile, fieldnames=fieldnames)
+                writer.writeheader()
+                writer.writerows(valid_rows)
+        
+        return FileResponse(path=valid_file_path, media_type='text/csv', filename=valid_filename)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error creating filtered file: {str(e)}")
 
-@app.get("/admin/recent-results")
-async def get_recent_results(db: AsyncSession = Depends(get_db)):
-    result = await db.execute(
-        select(EmailRecord).order_by(EmailRecord.created_at.desc()).limit(5000)
-    )
-    records = result.scalars().all()
-    return [r.to_dict() for r in records]
+@app.get("/download-invalid/{filename}")
+def download_invalid_emails(filename: str):
+    """Download CSV file containing only invalid emails (Invalid, Disposable, Disabled, etc.)"""
+    file_path = os.path.join(".", filename)
+    if not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail="File not found")
+    
+    # Create filtered CSV with only invalid emails
+    invalid_filename = filename.replace("validated_", "invalid_only_")
+    invalid_file_path = os.path.join(".", invalid_filename)
+    
+    try:
+        with open(file_path, 'r', newline='', encoding='utf-8') as infile:
+            reader = csv.DictReader(infile)
+            fieldnames = reader.fieldnames
+            
+            # Filter for invalid emails (not safe/role)
+            invalid_rows = [row for row in reader if row.get('status') not in ('safe', 'role', 'Valid')]
+            
+            # Write filtered data to new file
+            with open(invalid_file_path, 'w', newline='', encoding='utf-8') as outfile:
+                writer = csv.DictWriter(outfile, fieldnames=fieldnames)
+                writer.writeheader()
+                writer.writerows(invalid_rows)
+        
+        return FileResponse(path=invalid_file_path, media_type='text/csv', filename=invalid_filename)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error creating filtered file: {str(e)}")
 
-@app.get("/summary")
-async def get_summary(db: AsyncSession = Depends(get_db)):
-    total = await db.scalar(select(func.count()).select_from(EmailRecord))
-    valid = await db.scalar(select(func.count()).select_from(EmailRecord).where(EmailRecord.status == "Valid"))
-    invalid = total - valid
-    last_upload = await db.scalar(select(EmailRecord.created_at).order_by(EmailRecord.created_at.desc()).limit(1))
-
-    return {
-        "total_uploads": total,
-        "valid_emails": valid,
-        "invalid_emails": invalid,
-        "last_upload": last_upload.isoformat() if last_upload else None,
-    }
-
-@app.get("/admin/email-stats")
-async def get_email_stats(db: AsyncSession = Depends(get_db)):
-    result = await db.execute(
-        select(func.date(EmailRecord.created_at).label("date"),
-               func.count().label("total"),
-               func.sum(case((EmailRecord.status == "Valid", 1), else_=0)).label("valid"),
-               func.sum(case((EmailRecord.status != "Valid", 1), else_=0)).label("invalid"))
-        .group_by(func.date(EmailRecord.created_at))
-        .order_by(func.date(EmailRecord.created_at))
-    )
-    rows = result.all()
-
-    total_count = await db.scalar(select(func.count()).select_from(EmailRecord))
-    valid_count = await db.scalar(select(func.count()).select_from(EmailRecord).where(EmailRecord.status == "Valid"))
-    invalid_count = total_count - valid_count
-
-    regex_acc = await db.scalar(
-        select(func.avg(case((EmailRecord.regex == "valid", 100), else_=0)))
-    )
-    mx_acc = await db.scalar(
-        select(func.avg(case((EmailRecord.mx == "valid", 100), else_=0)))
-    )
-    smtp_acc = await db.scalar(
-        select(func.avg(case((EmailRecord.smtp == "valid", 100), else_=0)))
-    )
-
-    return {
-        "trend": [{"date": str(r.date), "valid": r.valid, "invalid": r.invalid} for r in rows],
-        "counts": {
-            "total": total_count,
-            "valid": valid_count,
-            "invalid": invalid_count,
-            "regex_accuracy": round(regex_acc or 0, 2),
-            "mx_accuracy": round(mx_acc or 0, 2),
-            "smtp_accuracy": round(smtp_acc or 0, 2),
-        }
-    }
-
-@app.get("/emails")
-async def get_emails(db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(EmailRecord))
-    records = result.scalars().all()
-    return [r.to_dict() for r in records]
-
-# ======================= Admin User Management =======================
-
-@router.post("/admin/login")
-async def admin_login(data: LoginData, db: AsyncSession = Depends(get_db)):
-    user = await db.scalar(select(User).where(User.email == data.email))
-    if not user:
-        raise HTTPException(status_code=401, detail="Invalid email")
-
-    if not verify_password(data.password, user.hashed_password):
-        raise HTTPException(status_code=401, detail="Incorrect password")
-
-    if user.role != "admin":
-        raise HTTPException(status_code=403, detail="Access denied")
-
-    return {
-        "email": user.email
-    }
-
-@router.post("/block-user")
-async def block_user(data: BlockData, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(User).where(User.id == data.id))
-    user = result.scalar_one_or_none()
-
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-
-    user.blocked = data.blocked
-    db.add(user)
-    await db.commit()
-
-    return {"message": "User block status updated successfully"}
-
-@router.delete("/delete-user/{user_id}")
-async def delete_user(user_id: int, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(User).where(User.id == user_id))
-    user = result.scalar_one_or_none()
-
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-
-    await db.delete(user)
-    await db.commit()
-    return {"message": "User deleted successfully"}
-
-@router.put("/update-user")
-async def update_user(data: UserUpdate, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(User).where(User.id == data.id))
-    user = result.scalar_one_or_none()
-
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-
-    user.email = data.email
-    user.role = data.role
-    user.status = data.status
-    await db.commit()
-    return {"message": "User updated successfully"}
-
-@router.get("/users")
-async def get_users(db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(User))
-    users = result.scalars().all()
-    return users
-
-@router.get("/user/emails")
-async def get_user_emails(db: AsyncSession = Depends(get_db), user: User = Depends(get_db)):
-    result = await db.execute(select(EmailRecord).where(EmailRecord.user_id == user.id))
-    records = result.scalars().all()
-    return [r.to_dict() for r in records]
-
-@router.get("/validation-stats/weekly")
-async def get_weekly_stats(
-    db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user)
-):
-    from datetime import datetime, timedelta
-
-    today = datetime.utcnow()
-    week_ago = today - timedelta(days=7)
-
-    result = await db.execute(
-        select(
-            func.to_char(EmailRecord.created_at, 'Dy').label("day"),
-            func.count().label("emails")
-        )
-        .where(
-            EmailRecord.user_id == user.id,
-            EmailRecord.created_at >= week_ago
-        )
-        .group_by("day")
-    )
-
-    data = result.fetchall()
-    return [{"day": row.day, "emails": row.emails} for row in data]
-
-# ======================= Include Routers =======================
-
-
-class BuyCreditsRequest(BaseModel):
-    """Model for buying instant credits"""
-    credits: int = Field(..., gt=0, description="Number of credits to purchase")
-    price: float = Field(..., gt=0, description="Price to pay")
-    user_id: int = Field(..., description="User ID (ignored, uses JWT)")
-    plan: Literal["instant", "monthly"] = Field(default="instant")
-    package_name: Optional[str] = None
-
-class SubscriptionRequest(BaseModel):
-    """Model for monthly subscription"""
-    credits_per_day: int = Field(..., gt=0)
-    monthly_cost: float = Field(..., gt=0)
-    discount: int = Field(default=0, ge=0, le=100)
-
-# ======================= Buy Credits Endpoint =======================
+# ======================= Credits =======================
 
 @app.post("/api/credits/buy")
-async def buy_credits(
-    data: BuyCreditsRequest,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
-):
-    """
-    Purchase instant credits (one-time payment, lifetime validity)
-    
-    Flow:
-    1. Validate request data
-    2. Generate unique order ID
-    3. Add credits to user account
-    4. Commit to database
-    5. Return success response with new balance
-    """
+async def buy_credits(data: BuyCreditsRequest, db: AsyncSession = Depends(get_db), current_user: User = Depends(get_current_user)):
     try:
-        # Validate amounts
-        if data.credits <= 0:
-            raise HTTPException(
-                status_code=400, 
-                detail="Credits must be greater than 0"
-            )
-        
-        if data.price <= 0:
-            raise HTTPException(
-                status_code=400, 
-                detail="Price must be greater than 0"
-            )
-        
-        # Generate unique order ID
         order_id = f"ORD-{uuid4().hex[:8].upper()}"
-        
-        # Store old balance for logging
         old_balance = current_user.credits
-        
-        # Add credits to user account
         current_user.credits += data.credits
         
-        # Log the transaction
-        print(f"\n{'='*60}")
-        print(f"💳 CREDIT PURCHASE")
-        print(f"{'='*60}")
-        print(f"Order ID: {order_id}")
-        print(f"User: {current_user.email} (ID: {current_user.id})")
-        print(f"Credits Purchased: {data.credits}")
-        print(f"Price Paid: ${data.price}")
-        print(f"Old Balance: {old_balance}")
-        print(f"New Balance: {current_user.credits}")
-        print(f"Plan: {data.plan}")
-        print(f"Timestamp: {datetime.utcnow().isoformat()}")
-        print(f"{'='*60}\n")
-        
-        # Commit changes to database
-        await db.commit()
-        await db.refresh(current_user)
-        
-        # Return success response
-        return {
-            "success": True,
-            "order_id": order_id,
-            "message": "Credits purchased successfully",
-            "credits_purchased": data.credits,
-            "price_paid": data.price,
-            "old_balance": old_balance,
-            "new_balance": current_user.credits,
-            "plan": data.plan,
-            "timestamp": datetime.utcnow().isoformat()
-        }
-        
-    except HTTPException:
-        # Re-raise HTTP exceptions
-        raise
-    except Exception as e:
-        # Rollback on any error
-        await db.rollback()
-        print(f"❌ Credit purchase failed: {str(e)}")
-        raise HTTPException(
-            status_code=500, 
-            detail=f"Purchase failed: {str(e)}"
-        )
-
-
-# ======================= Subscribe to Monthly Plan =======================
-
-@app.post("/api/credits/subscribe")
-async def subscribe_monthly(
-    data: SubscriptionRequest,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
-):
-    """
-    Subscribe to monthly credit plan with daily renewal
-    
-    Note: For production, you'd need to:
-    1. Add subscription fields to User model
-    2. Implement daily credit renewal cron job
-    3. Integrate payment gateway for recurring payments
-    """
-    try:
-        if data.credits_per_day <= 0:
-            raise HTTPException(
-                status_code=400, 
-                detail="Daily credits must be greater than 0"
-            )
-        
-        # Calculate monthly credits
-        monthly_credits = data.credits_per_day * 30
-        
-        # For now, just add the monthly credits immediately
-        # In production, implement daily renewal
-        old_balance = current_user.credits
-        current_user.credits += monthly_credits
-        
-        # Log subscription
-        print(f"\n{'='*60}")
-        print(f"📅 MONTHLY SUBSCRIPTION")
-        print(f"{'='*60}")
-        print(f"User: {current_user.email}")
-        print(f"Daily Credits: {data.credits_per_day}")
-        print(f"Monthly Credits: {monthly_credits}")
-        print(f"Monthly Cost: ${data.monthly_cost}")
-        print(f"Discount Applied: {data.discount}%")
-        print(f"Old Balance: {old_balance}")
-        print(f"New Balance: {current_user.credits}")
-        print(f"{'='*60}\n")
+        # Log to history
+        db.add(CreditHistory(
+            user_id=current_user.id,
+            reason=f"Purchase - {data.package_name or f'{data.credits} credits'}",
+            credits_change_instant=data.credits,
+            balance_after_instant=current_user.credits
+        ))
         
         await db.commit()
         await db.refresh(current_user)
         
         return {
-            "success": True,
-            "message": "Subscription activated successfully",
-            "daily_credits": data.credits_per_day,
-            "monthly_credits": monthly_credits,
-            "monthly_cost": data.monthly_cost,
-            "discount": data.discount,
-            "old_balance": old_balance,
-            "new_balance": current_user.credits,
-            "timestamp": datetime.utcnow().isoformat()
-        }
-        
-    except Exception as e:
-        await db.rollback()
-        print(f"❌ Subscription failed: {str(e)}")
-        raise HTTPException(
-            status_code=500, 
-            detail=f"Subscription failed: {str(e)}"
-        )
-
-
-# ======================= Get Credit Balance =======================
-
-@app.get("/api/credits/balance")
-async def get_credit_balance(
-    current_user: User = Depends(get_current_user)
-):
-    """
-    Get current credit balance and user info
-    """
-    return {
-        "success": True,
-        "credits": current_user.credits,
-        "email": current_user.email,
-        "name": current_user.name,
-        "user_id": current_user.id
-    }
-
-
-# ======================= Test Endpoint (Optional) =======================
-
-@app.post("/api/credits/test-purchase")
-async def test_credit_purchase(
-    amount: int,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
-):
-    """
-    Test endpoint to manually add credits (for development only)
-    Remove this in production!
-    """
-    try:
-        if amount <= 0:
-            raise HTTPException(status_code=400, detail="Amount must be positive")
-        
-        old_balance = current_user.credits
-        current_user.credits += amount
-        
-        await db.commit()
-        await db.refresh(current_user)
-        
-        return {
-            "message": f"Added {amount} test credits",
-            "old_balance": old_balance,
-            "new_balance": current_user.credits
+            "success": True, "order_id": order_id,
+            "credits_purchased": data.credits, "new_balance": current_user.credits
         }
     except Exception as e:
         await db.rollback()
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.post("/api/credits/subscribe")
+async def subscribe_monthly(data: SubscriptionRequest, db: AsyncSession = Depends(get_db), current_user: User = Depends(get_current_user)):
+    try:
+        monthly_credits = data.credits_per_day * 30
+        current_user.credits += monthly_credits
+        
+        # Log to history
+        db.add(CreditHistory(
+            user_id=current_user.id,
+            reason="Monthly Subscription",
+            credits_change_instant=monthly_credits,
+            balance_after_instant=current_user.credits
+        ))
+        
+        await db.commit()
+        return {"success": True, "monthly_credits": monthly_credits, "new_balance": current_user.credits}
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
 
-# ======================= IMPORTANT: Error Handling Middleware =======================
+@app.get("/api/credits/balance")
+async def get_credit_balance(current_user: User = Depends(get_current_user)):
+    return {"success": True, "credits": current_user.credits}
 
-@app.exception_handler(HTTPException)
-async def http_exception_handler(request, exc):
-    """Custom error handler for better error messages"""
-    return {
-        "success": False,
-        "error": exc.detail,
-        "status_code": exc.status_code
-    }
+@app.get("/api/credits/my-history")
+async def get_my_credit_history(db: AsyncSession = Depends(get_db), current_user: User = Depends(get_current_user)):
+    result = await db.execute(
+        select(CreditHistory).where(CreditHistory.user_id == current_user.id)
+        .order_by(CreditHistory.created_at.desc()).limit(100)
+    )
+    history = result.scalars().all()
+    
+    # Debug logging
+    print(f"INFO: Fetching history for user {current_user.email}")
+    print(f"Found {len(history)} records")
+    
+    response = []
+    for r in history:
+        record = {
+            "id": r.id,
+            "reason": r.reason or "Unknown",
+            "credits_change_instant": r.credits_change_instant or 0,
+            "balance_after_instant": r.balance_after_instant or 0,
+            "created_at": r.created_at.isoformat() if r.created_at else None
+        }
+        response.append(record)
+        print(f"  - {r.reason}: {r.credits_change_instant} credits, balance: {r.balance_after_instant}")
+    
+    return response
+
+# ======================= Admin =======================
 
 @app.post("/api/add-credits")
-async def admin_add_credits(
-    data: AddCreditsRequest,
-    db: AsyncSession = Depends(get_db)
-):
-    """Admin endpoint to add credits - NO AUTH"""
-    
-    print(f"🔍 Add credits request for user ID: {data.user_id}")
-    
+async def admin_add_credits(data: AddCreditsRequest, db: AsyncSession = Depends(get_db)):
     try:
-        # Get target user
         result = await db.execute(select(User).where(User.id == data.user_id))
         target_user = result.scalar_one_or_none()
-        
         if not target_user:
             raise HTTPException(status_code=404, detail="User not found")
         
         old_balance = target_user.credits
         target_user.credits += data.credits
         
-        print(f"✅ Added {data.credits} credits to {target_user.email}")
-        print(f"   Old: {old_balance} → New: {target_user.credits}")
+        # Log to history
+        db.add(CreditHistory(
+            user_id=target_user.id,
+            reason="Admin Credit Addition",
+            credits_change_instant=data.credits,
+            balance_after_instant=target_user.credits
+        ))
         
         await db.commit()
         await db.refresh(target_user)
         
         return {
-            "success": True,
-            "message": f"Successfully added {data.credits} credits to {target_user.email}",
-            "user_id": target_user.id,
-            "user_email": target_user.email,
-            "credits_added": data.credits,
-            "old_balance": old_balance,
-            "new_balance": target_user.credits,
+            "success": True, "message": f"Added {data.credits} credits",
+            "new_balance": target_user.credits
         }
-        
-    except HTTPException:
-        raise
     except Exception as e:
         await db.rollback()
-        print(f"❌ Failed: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Failed to add credits: {str(e)}")
-        
-           
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/users")
+async def get_users(db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(User))
+    return result.scalars().all()
+
+@router.post("/block-user")
+async def block_user(data: BlockData, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(User).where(User.id == data.id))
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    user.blocked = data.blocked
+    await db.commit()
+    return {"message": "User updated"}
+
+@router.delete("/delete-user/{user_id}")
+async def delete_user(user_id: int, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    await db.delete(user)
+    await db.commit()
+    return {"message": "User deleted"}
+
+@router.put("/update-user")
+async def update_user(data: UserUpdate, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(User).where(User.id == data.id))
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    user.email = data.email
+    user.role = data.role
+    user.status = data.status
+    await db.commit()
+    return {"message": "User updated"}
+
+# ======================= Stats =======================
+
+@app.get("/summary")
+async def get_summary(db: AsyncSession = Depends(get_db)):
+    total = await db.scalar(select(func.count()).select_from(EmailRecord))
+    valid = await db.scalar(select(func.count()).select_from(EmailRecord).where(EmailRecord.status == "Valid"))
+    return {"total_uploads": total, "valid_emails": valid, "invalid_emails": total - valid}
+
+@app.get("/admin/email-stats")
+async def get_email_stats(db: AsyncSession = Depends(get_db)):
+    total = await db.scalar(select(func.count()).select_from(EmailRecord))
+    valid = await db.scalar(select(func.count()).select_from(EmailRecord).where(EmailRecord.status == "Valid"))
+    return {"counts": {"total": total, "valid": valid, "invalid": total - valid}}
+
+@app.get("/user/all-emails")
+async def get_all_emails_for_user(db: AsyncSession = Depends(get_db), current_user: User = Depends(get_current_user)):
+    result = await db.execute(select(EmailRecord).where(EmailRecord.user_id == current_user.id))
+    records = result.scalars().all()
+    return [r.to_dict() for r in records]
+
+@app.get("/user/validation-tasks")
+async def get_user_validation_tasks(db: AsyncSession = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """Get all validation tasks for the current user"""
+    result = await db.execute(
+        select(ValidationTask)
+        .where(ValidationTask.user_id == current_user.id)
+        .order_by(ValidationTask.created_at.desc())
+    )
+    tasks = result.scalars().all()
+    return [task.to_dict() for task in tasks]
+
+@app.get("/user/validation-task/{task_id}")
+async def get_validation_task_details(task_id: str, db: AsyncSession = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """Get detailed information about a specific validation task"""
+    result = await db.execute(
+        select(ValidationTask)
+        .where(ValidationTask.task_id == task_id, ValidationTask.user_id == current_user.id)
+    )
+    task = result.scalar_one_or_none()
+    
+    if not task:
+        raise HTTPException(status_code=404, detail="Validation task not found")
+    
+    return task.to_dict()
+
+@app.delete("/user/validation-task/{task_id}")
+async def delete_validation_task(task_id: str, db: AsyncSession = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """Delete a validation task"""
+    result = await db.execute(
+        select(ValidationTask)
+        .where(ValidationTask.task_id == task_id, ValidationTask.user_id == current_user.id)
+    )
+    task = result.scalar_one_or_none()
+    
+    if not task:
+        raise HTTPException(status_code=404, detail="Validation task not found")
+    
+    await db.delete(task)
+    await db.commit()
+    
+    return {"message": "Validation task deleted successfully", "task_id": task_id}
+
+@app.get("/api/validation-stats/weekly")
+async def get_weekly_stats(db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
+    today = datetime.utcnow()
+    week_ago = today - timedelta(days=7)
+    
+    # PostgreSQL uses EXTRACT(DOW FROM ...) for day of week (0=Sunday, 6=Saturday)
+    # We'll map these to Mon-Sun
+    result = await db.execute(
+        select(
+            func.extract('dow', EmailRecord.created_at).label("day_num"),
+            func.count().label("emails")
+        ).where(
+            EmailRecord.user_id == user.id,
+            EmailRecord.created_at >= week_ago
+        ).group_by("day_num")
+    )
+    rows = result.fetchall()
+    day_map = {0: "Sun", 1: "Mon", 2: "Tue", 3: "Wed", 4: "Thu", 5: "Fri", 6: "Sat"}
+    data = [{"day": day_map.get(int(row[0]), "Unknown"), "emails": row[1]} for row in rows]
+    return data
+
+
+
+@app.get("/admin/recent-results")
+async def get_recent_results(db: AsyncSession = Depends(get_db)):
+    result = await db.execute(
+        select(EmailRecord).order_by(EmailRecord.created_at.desc()).limit(100)
+    )
+    records = result.scalars().all()
+    return [r.to_dict() for r in records]
+
+# ======================= Performance Metrics =======================
+
+@app.get("/api/metrics")
+async def get_validation_metrics():
+    """Get performance metrics for email validation (DNS times, SMTP times, etc.)"""
+    global _async_validator
+    if _async_validator is None:
+        return {"error": "Validator not initialized", "metrics": {}}
+    
+    metrics = _async_validator.get_metrics()
+    pool_stats = _async_validator._connection_pool.stats()
+    cache_size = _async_validator._mx_cache.size()
+    
+    return {
+        "status": "ok",
+        "mx_cache_size": cache_size,
+        "connection_pools": pool_stats,
+        "domain_metrics": metrics,
+        "config": {
+            "max_concurrent_validations": 400,
+            "dns_timeout_sec": 1.5,
+            "smtp_timeout_sec": 2.0,
+            "chunk_size": 250,
+        }
+    }
+
+# ======================= Include Routers =======================
+
 app.include_router(router, prefix="/admin")
-app.include_router(router, prefix="/api")
-app.include_router(signup_router)  
-app.include_router(credits.router, tags=["credits"])
+app.include_router(signup_router)

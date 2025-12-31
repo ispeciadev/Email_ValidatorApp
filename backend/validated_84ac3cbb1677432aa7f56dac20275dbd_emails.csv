@@ -1,0 +1,15 @@
+email,syntax_valid,domain_exists,mx_record_exists,role_based,disposable,smtp_valid,blacklist,catch_all,status,verdict
+0,Not Valid,Not Valid,False,No,No,not_checked,No,No,Invalid,Invalid
+1,Not Valid,Not Valid,False,No,No,not_checked,No,No,Invalid,Invalid
+2,Not Valid,Not Valid,False,No,No,not_checked,No,No,Invalid,Invalid
+4,Not Valid,Not Valid,False,No,No,not_checked,No,No,Invalid,Invalid
+3,Not Valid,Not Valid,False,No,No,not_checked,No,No,Invalid,Invalid
+6,Not Valid,Not Valid,False,No,No,not_checked,No,No,Invalid,Invalid
+7,Not Valid,Not Valid,False,No,No,not_checked,No,No,Invalid,Invalid
+8,Not Valid,Not Valid,False,No,No,not_checked,No,No,Invalid,Invalid
+35,Not Valid,Not Valid,False,No,No,not_checked,No,No,Invalid,Invalid
+5,Not Valid,Not Valid,False,No,No,not_checked,No,No,Invalid,Invalid
+10,Not Valid,Not Valid,False,No,No,not_checked,No,No,Invalid,Invalid
+11,Not Valid,Not Valid,False,No,No,not_checked,No,No,Invalid,Invalid
+17,Not Valid,Not Valid,False,No,No,not_checked,No,No,Invalid,Invalid
+24,Not Valid,Not Valid,False,No,No,not_checked,No,No,Invalid,Invalid

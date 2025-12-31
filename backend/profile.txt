@@ -1,0 +1,18 @@
+Initializing validator...
+Warmed up: gmail.com -> gmail-smtp-in.l.google.com
+Warmed up: yahoo.com -> mta6.am0.yahoodns.net
+Warmed up: outlook.com -> outlook-com.olc.protection.outlook.com
+Warmed up: hotmail.com -> hotmail-com.olc.protection.outlook.com
+Warmed up: icloud.com -> mx02.mail.icloud.com
+Warmed up: aol.com -> mx-aol.mail.gm0.yahoodns.net
+Warmed up: live.com -> live-com.olc.protection.outlook.com
+Warmed up: msn.com -> msn-com.olc.protection.outlook.com
+AsyncEmailValidator initialized. MX cache: 8 domains
+
+Profiling validation for: abhishek79saini@gmail.com
+DNS MX Lookup: 0.0000s
+MX Hosts: ['gmail-smtp-in.l.google.com', 'alt1.gmail-smtp-in.l.google.com', 'alt2.gmail-smtp-in.l.google.com', 'alt3.gmail-smtp-in.l.google.com', 'alt4.gmail-smtp-in.l.google.com']
+SMTP Check Total: 2.0033s
+SMTP Result: {'valid': False, 'status': 'connection_failed', 'code': 0}
+
+Total Time: 2.0033s

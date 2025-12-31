@@ -4,6 +4,7 @@ import axios from 'axios';
 import { useNavigate } from 'react-router-dom';
 import AOS from 'aos';
 import 'aos/dist/aos.css';
+import { API_BASE_URL } from '../../config/api';
 
 const AdminLogin = () => {
   const [showPassword, setShowPassword] = useState(false);
@@ -27,15 +28,17 @@ const AdminLogin = () => {
     e.preventDefault();
     if (!passwordError && email && password) {
       try {
-        const res = await axios.post('http://localhost:8000/login', {
+        const res = await axios.post(`${API_BASE_URL}/login`, {
           email: email.trim(),       // 🚀 trim to avoid trailing/leading spaces
           password: password
         });
 
-        const { role } = res.data;
+        const { role, token } = res.data;
 
         if (role === 'admin') {
+          localStorage.setItem('token', token);
           localStorage.setItem('role', role);
+          localStorage.setItem('user', JSON.stringify({ email: email.trim(), role }));
           alert("Login Successful");
           navigate("/admin/dashboard")
         } else {

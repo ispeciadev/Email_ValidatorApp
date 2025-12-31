@@ -1,0 +1,4 @@
+Attempting to connect to gmail-smtp-in.l.google.com:25...
+Resolved gmail-smtp-in.l.google.com to 172.253.118.26
+Successfully connected via TCP socket!
+Successfully performed SMTP handshake!

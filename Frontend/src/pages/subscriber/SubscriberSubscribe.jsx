@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { motion } from "framer-motion";
 import axios from "axios";
+import { API_BASE_URL } from "../../config/api";
 
 const SubscriberSubscribe = () => {
   const navigate = useNavigate();
@@ -16,7 +17,7 @@ const SubscriberSubscribe = () => {
 
     try {
       // Replace this API with your backend subscription endpoint
-      const response = await axios.post("http://localhost:8000/subscriber/subscribe", {
+      const response = await axios.post(`${API_BASE_URL}/subscriber/subscribe`, {
         email,
       });
 

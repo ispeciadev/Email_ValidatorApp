@@ -1,3 +1,5 @@
+import { API_BASE_URL } from "../../config/api";
+
 export default function ResultsTable({ results }) {
   return (
     <div className="mt-8">
@@ -22,7 +24,7 @@ export default function ResultsTable({ results }) {
               <td className="p-2 border">{res.invalid}</td>
               <td className="p-2 border">
                 <a
-                  href={`http://localhost:8000${res.validated_download}`}
+                  href={`${API_BASE_URL}${res.validated_download}`}
                   target="_blank"
                   rel="noreferrer"
                   className="text-blue-600 underline"
@@ -32,7 +34,7 @@ export default function ResultsTable({ results }) {
               </td>
               <td className="p-2 border">
                 <a
-                  href={`http://localhost:8000${res.failed_download}`}
+                  href={`${API_BASE_URL}${res.failed_download}`}
                   target="_blank"
                   rel="noreferrer"
                   className="text-red-600 underline"

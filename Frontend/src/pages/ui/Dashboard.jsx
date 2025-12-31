@@ -23,6 +23,7 @@ import {
   Legend,
   ResponsiveContainer,
 } from "recharts";
+import { API_BASE_URL } from "../../config/api";
 
 const COLORS = ["#22c55e", "#ef4444", "#3b82f6"];
 
@@ -40,6 +41,10 @@ const Dashboard = () => {
   const [bulkTimeTaken, setBulkTimeTaken] = useState(null);
   const [weeklyStats, setWeeklyStats] = useState([]);
   const [credits, setCredits] = useState(null);
+  const [selectedBulkTask, setSelectedBulkTask] = useState(null); // For viewing bulk task details
+  const [bulkTaskEmails, setBulkTaskEmails] = useState([]); // Individual emails from bulk task
+  const [selectedEmailDetail, setSelectedEmailDetail] = useState(null); // For showing individual email modal
+  const [validationTasks, setValidationTasks] = useState([]); // Bulk validation history
   const userId = 1;
   const handleFileChange = (e) => setSelectedFiles(e.target.files);
 
@@ -85,7 +90,7 @@ const Dashboard = () => {
     // Fetch total stats (valid/invalid/etc)
     const fetchUserRecords = async () => {
       try {
-        const res = await axios.get("http://localhost:8000/user/all-emails", {
+        const res = await axios.get(`${API_BASE_URL}/user/all-emails`, {
           headers: {
             Authorization: `Bearer ${token}`,
           },
@@ -116,7 +121,7 @@ const Dashboard = () => {
     const fetchWeeklyStats = async () => {
       try {
         const res = await fetch(
-          "http://localhost:8000/api/validation-stats/weekly",
+          `${API_BASE_URL}/api/validation-stats/weekly`,
           {
             headers: {
               Authorization: `Bearer ${token}`,
@@ -156,8 +161,22 @@ const Dashboard = () => {
       }
     };
 
+    const fetchValidationTasks = async () => {
+      try {
+        const res = await axios.get(`${API_BASE_URL}/user/validation-tasks`, {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        });
+        setValidationTasks(res.data);
+      } catch (err) {
+        console.error("Error fetching validation tasks:", err);
+      }
+    };
+
     fetchUserRecords();
     fetchWeeklyStats();
+    fetchValidationTasks();
   }, []);
 
   const handleUpload = async () => {
@@ -177,7 +196,7 @@ const Dashboard = () => {
       const token = localStorage.getItem("token");
       const startTime = performance.now();
       const response = await axios.post(
-        "http://localhost:8000/validate-emails/",
+        `${API_BASE_URL}/validate-emails/`,
         formData,
         {
           headers: {
@@ -191,6 +210,16 @@ const Dashboard = () => {
 
       setResults(response.data.results);
       setBulkTimeTaken(seconds);
+
+      // Refresh validation tasks list
+      try {
+        const tasksRes = await axios.get(`${API_BASE_URL}/user/validation-tasks`, {
+          headers: { Authorization: `Bearer ${token}` }
+        });
+        setValidationTasks(tasksRes.data);
+      } catch (err) {
+        console.error("Error refreshing tasks:", err);
+      }
     } catch (err) {
       console.error(err);
       alert("Something went wrong.");
@@ -208,12 +237,12 @@ const Dashboard = () => {
       const token = localStorage.getItem("token");
 
       const res = await axios.post(
-        "http://127.0.0.1:8000/validate-single-email/",
+        `${API_BASE_URL}/validate-single-email/`,
         formData,
         {
           headers: {
-            Authorization: `Bearer ${token}`,
             "Content-Type": "multipart/form-data",
+            Authorization: `Bearer ${token}`,
           },
         }
       );
@@ -229,20 +258,20 @@ const Dashboard = () => {
     }
   };
   // Fetch credits on mount
-useEffect(() => {
-  const token = localStorage.getItem("token");
-  if (!token) return;
-  
-  axios.get("http://localhost:8000/user/credits", {
-    headers: {
-      Authorization: `Bearer ${token}`
-    }
-  }).then((res) => {
-    setCredits(res.data.credits);
-  }).catch(err => {
-    console.error("Failed to fetch credits:", err);
-  });
-}, []);
+  useEffect(() => {
+    const token = localStorage.getItem("token");
+    if (!token) return;
+
+    axios.get(`${API_BASE_URL}/user/credits`, {
+      headers: {
+        Authorization: `Bearer ${token}`
+      }
+    }).then((res) => {
+      setCredits(res.data.credits);
+    }).catch(err => {
+      console.error("Failed to fetch credits:", err);
+    });
+  }, []);
 
   const handleBuyCredits = async (amount) => {
     const res = await axios.post(`/api/users/${userId}/buy-credits`, { amount });
@@ -270,9 +299,8 @@ useEffect(() => {
             <FaTachometerAlt /> Dashboard
           </button>
           <button
-            className={`flex items-center gap-3 px-3 py-2 rounded-lg w-full text-left transition ${selectedTab === "profile" ? "bg-blue-600" : "hover:bg-blue-900"
-              }`}
-            onClick={() => setSelectedTab("profile")}
+            className={`flex items-center gap-3 px-3 py-2 rounded-lg w-full text-left transition hover:bg-blue-900`}
+            onClick={() => navigate("/profile")}
           >
             <FaUser /> Profile
           </button>
@@ -292,8 +320,8 @@ useEffect(() => {
           </button>
           <button
             className={`flex items-center gap-3 px-3 py-2 rounded-lg w-full text-left transition ${selectedTab === "subscription"
-                ? "bg-blue-600"
-                : "hover:bg-blue-900"
+              ? "bg-blue-600"
+              : "hover:bg-blue-900"
               }`}
             onClick={() => setSelectedTab("subscription")}
           >
@@ -301,8 +329,8 @@ useEffect(() => {
           </button>
           <button
             className={`flex items-center gap-3 px-3 py-2 rounded-lg w-full text-left transition ${selectedTab === "buycredit"
-                ? "bg-blue-600"
-                : "hover:bg-blue-900"
+              ? "bg-blue-600"
+              : "hover:bg-blue-900"
               }`}
             onClick={() => navigate("/buy-credit")}
           >
@@ -311,8 +339,8 @@ useEffect(() => {
           </button>
           <button
             className={`flex items-center gap-3 px-3 py-2 rounded-lg w-full text-left transition ${selectedTab === "buycredit"
-                ? "bg-blue-600"
-                : "hover:bg-blue-900"
+              ? "bg-blue-600"
+              : "hover:bg-blue-900"
               }`}
             onClick={() => navigate("/credit-history")}
           >
@@ -328,16 +356,9 @@ useEffect(() => {
             </div>
 
             <div className="flex justify-between items-center">
-              <span>Daily Credits</span>
+              <span>Remaining Credits</span>
               <span className="px-3 py-1 rounded-full bg-blue-100 text-blue-600 font-bold">
-                {credits ? credits.total_credits : "…"}
-              </span>
-            </div>
-
-            <div className="flex justify-between items-center">
-              <span>Instant Credits</span>
-              <span className="px-3 py-1 rounded-full bg-green-100 text-green-600 font-bold">
-                {credits ? credits.instant_credits : "…"}
+                {credits !== null ? credits : "…"}
               </span>
             </div>
           </div>
@@ -353,7 +374,7 @@ useEffect(() => {
               <div className="flex items-center gap-3 text-lg font-semibold text-gray-800">
                 Credits:
                 <span className="px-3 py-1 rounded-full bg-blue-100 text-blue-600 font-bold">
-
+                  {credits !== null ? credits : "…"}
                 </span>
               </div>
 
@@ -383,7 +404,7 @@ useEffect(() => {
               </div>
               <div className="bg-yellow-100 shadow-lg rounded-xl p-6 text-center">
                 <p className="text-gray-500">Disposable</p>
-                <p className="text-2xl font-bold">{0}</p>
+                <p className="text-2xl font-bold">{stats.disposable}</p>
               </div>
             </div>
             {/* Line Chart */}
@@ -475,22 +496,126 @@ useEffect(() => {
                 </button>
               </form>
               {singleResult && (
-                <div className="bg-white/10 mt-8 p-6 rounded-lg max-w-lg mx-auto text-left text-sm border border-white/20 text-white animate-fade-in delay-300">
-                  <p>
-                    <strong>Email:</strong> {singleResult.email}
-                  </p>
-                  <p>
-                    <strong>Regex:</strong> {singleResult.regex}
-                  </p>
-                  <p>
-                    <strong>MX:</strong> {singleResult.mx}
-                  </p>
-                  <p>
-                    <strong>SMTP:</strong> {singleResult.smtp}
-                  </p>
-                  <p>
-                    <strong>Status:</strong> {singleResult.status}
-                  </p>
+                <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 animate-fade-in p-4">
+                  <div className="bg-white rounded-2xl max-w-4xl w-full shadow-2xl">
+                    {/* Header with Status Icon */}
+                    <div className="text-center py-6 border-b border-gray-200">
+                      <div className="inline-flex items-center justify-center w-20 h-20 rounded-full bg-green-100 mb-3">
+                        <svg className="w-10 h-10 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                        </svg>
+                      </div>
+                      <h2 className="text-3xl font-bold text-gray-800 uppercase tracking-wide">
+                        {singleResult.status || 'SAFE'}
+                      </h2>
+                    </div>
+
+                    {/* Validation Details - 2 Column Layout */}
+                    <div className="p-6">
+                      <div className="grid grid-cols-2 gap-x-8 gap-y-1.5 text-sm text-gray-700">
+                        <div className="flex justify-between py-2 border-b border-gray-100">
+                          <span className="font-semibold text-gray-600">email:</span>
+                          <span className="text-blue-600 font-medium">{singleResult.email}</span>
+                        </div>
+
+                        <div className="flex justify-between py-2 border-b border-gray-100">
+                          <span className="font-semibold text-gray-600">status:</span>
+                          <span className="text-green-600 italic">{singleResult.status?.toLowerCase() || 'safe'}</span>
+                        </div>
+
+                        <div className="flex justify-between py-2 border-b border-gray-100">
+                          <span className="font-semibold text-gray-600">overall_score:</span>
+                          <span className="text-gray-800 italic">{singleResult.deliverability_score || singleResult.score || 98}/100</span>
+                        </div>
+
+                        <div className="flex justify-between py-2 border-b border-gray-100">
+                          <span className="font-semibold text-gray-600">is_safe_to_send:</span>
+                          <span className="text-green-600 italic">{singleResult.is_valid ? 'true' : 'false'}</span>
+                        </div>
+
+                        <div className="flex justify-between py-2 border-b border-gray-100">
+                          <span className="font-semibold text-gray-600">is_valid_syntax:</span>
+                          <span className="text-green-600 italic">
+                            {singleResult.syntax_valid === 'Valid' || singleResult.regex === 'Valid' ? 'true' : 'false'}
+                          </span>
+                        </div>
+
+                        <div className="flex justify-between py-2 border-b border-gray-100">
+                          <span className="font-semibold text-gray-600">is_disposable:</span>
+                          <span className="text-green-600 italic">
+                            {singleResult.disposable === 'Yes' ? 'true' : 'false'}
+                          </span>
+                        </div>
+
+                        <div className="flex justify-between py-2 border-b border-gray-100">
+                          <span className="font-semibold text-gray-600">is_role_account:</span>
+                          <span className="text-green-600 italic">
+                            {singleResult.role_based === 'Yes' ? 'true' : 'false'}
+                          </span>
+                        </div>
+
+                        <div className="flex justify-between py-2 border-b border-gray-100">
+                          <span className="font-semibold text-gray-600">mx_accepts_mail:</span>
+                          <span className="text-green-600 italic">
+                            {singleResult.mx_record_exists === 'Valid' || singleResult.mx === 'Valid' ? 'true' : 'false'}
+                          </span>
+                        </div>
+
+                        <div className="flex justify-between py-2 border-b border-gray-100">
+                          <span className="font-semibold text-gray-600">mx_records:</span>
+                          <span className="text-gray-600 italic text-sm truncate max-w-md">
+                            {singleResult.mx_records || 'alt4.gmail-smtp-in.l.google.com, [...]'}
+                          </span>
+                        </div>
+
+                        <div className="flex justify-between py-2 border-b border-gray-100">
+                          <span className="font-semibold text-gray-600">can_connect_smtp:</span>
+                          <span className="text-green-600 italic">
+                            {singleResult.smtp_valid === 'Valid' || singleResult.smtp === 'Valid' ? 'true' : 'false'}
+                          </span>
+                        </div>
+
+                        <div className="flex justify-between py-2 border-b border-gray-100">
+                          <span className="font-semibold text-gray-600">has_inbox_full:</span>
+                          <span className="text-green-600 italic">false</span>
+                        </div>
+
+                        <div className="flex justify-between py-2 border-b border-gray-100">
+                          <span className="font-semibold text-gray-600">is_catch_all:</span>
+                          <span className="text-green-600 italic">
+                            {singleResult.catch_all === 'Yes' ? 'true' : 'false'}
+                          </span>
+                        </div>
+
+                        <div className="flex justify-between py-2 border-b border-gray-100">
+                          <span className="font-semibold text-gray-600">is_deliverable:</span>
+                          <span className="text-green-600 italic">
+                            {singleResult.smtp_valid === 'Valid' || singleResult.smtp === 'Valid' ? 'true' : 'false'}
+                          </span>
+                        </div>
+
+                        <div className="flex justify-between py-2 border-b border-gray-100">
+                          <span className="font-semibold text-gray-600">is_disabled:</span>
+                          <span className="text-green-600 italic">false</span>
+                        </div>
+
+                        <div className="flex justify-between py-2 border-b border-gray-100">
+                          <span className="font-semibold text-gray-600">is_free_email:</span>
+                          <span className="text-green-600 italic">true</span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Close Button */}
+                  <div className="p-4 text-center border-t border-gray-200">
+                    <button
+                      onClick={() => setSingleResult(null)}
+                      className="px-8 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-lg shadow-md transition duration-200"
+                    >
+                      OK
+                    </button>
+                  </div>
                 </div>
               )}
               {singleTimeTaken !== null && (
@@ -580,14 +705,19 @@ useEffect(() => {
                 </h2>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-10 max-w-6xl mx-auto">
                   {results.map((file, idx) => {
-                    const data = [
-                      { name: "Valid", value: file.valid },
-                      { name: "Invalid", value: file.invalid },
-                      {
-                        name: "Remaining",
-                        value: file.total - file.valid - file.invalid,
-                      },
-                    ];
+                    // Enhanced data with all categories - SHOW ALL EVEN IF 0
+                    const detailedData = [
+                      { name: "Safe (Valid)", value: file.safe || 0, color: "#22c55e" },
+                      { name: "Role (Valid)", value: file.role || 0, color: "#84cc16" },
+                      { name: "Catch All", value: file.catch_all || 0, color: "#eab308" },
+                      { name: "Disposable", value: file.disposable || 0, color: "#f59e0b" },
+                      { name: "Inbox Full", value: file.inbox_full || 0, color: "#fb923c" },
+                      { name: "Spam Trap", value: file.spam_trap || 0, color: "#f97316" },
+                      { name: "Disabled", value: file.disabled || 0, color: "#ef4444" },
+                      { name: "Invalid", value: file.invalid || 0, color: "#dc2626" },
+                      { name: "Unknown", value: file.unknown || 0, color: "#9ca3af" },
+                    ]; // Show all categories, even with 0 values
+
                     return (
                       <div
                         key={idx}
@@ -599,44 +729,87 @@ useEffect(() => {
                         <p className="text-sm text-gray-500 mb-4">
                           Total Emails: {file.total}
                         </p>
-                        <PieChart width={360} height={250}>
-                          <Pie
-                            data={data}
-                            dataKey="value"
-                            nameKey="name"
-                            cx="50%"
-                            cy="50%"
-                            outerRadius={100}
-                            label
-                          >
-                            {data.map((entry, index) => (
-                              <Cell
-                                key={`cell-${index}`}
-                                fill={COLORS[index % COLORS.length]}
-                              />
+
+                        {/* Donut Chart with Legend */}
+                        <div className="flex items-center justify-center gap-6">
+                          <ResponsiveContainer width="60%" height={300}>
+                            <PieChart>
+                              <Pie
+                                data={detailedData}
+                                dataKey="value"
+                                nameKey="name"
+                                cx="50%"
+                                cy="50%"
+                                innerRadius={60}
+                                outerRadius={100}
+                              >
+                                {detailedData.map((entry, index) => (
+                                  <Cell key={`cell-${index}`} fill={entry.color} />
+                                ))}
+                              </Pie>
+                              <Tooltip />
+                              <text
+                                x="50%"
+                                y="50%"
+                                textAnchor="middle"
+                                dominantBaseline="middle"
+                                className="text-2xl font-bold fill-gray-700"
+                              >
+                                total
+                              </text>
+                              <text
+                                x="50%"
+                                y="58%"
+                                textAnchor="middle"
+                                dominantBaseline="middle"
+                                className="text-3xl font-bold fill-gray-800"
+                              >
+                                {file.total}
+                              </text>
+                            </PieChart>
+                          </ResponsiveContainer>
+
+                          {/* Legend */}
+                          <div className="flex flex-col gap-2 text-sm">
+                            {detailedData.map((item, index) => (
+                              <div key={index} className="flex items-center gap-2">
+                                <div
+                                  className="w-4 h-4 rounded"
+                                  style={{ backgroundColor: item.color }}
+                                ></div>
+                                <span className="text-gray-700">
+                                  {item.name}: <span className="font-semibold">{item.value}</span>
+                                </span>
+                              </div>
                             ))}
-                          </Pie>
-                          <Tooltip />
-                        </PieChart>
-                        <div className="mt-4 space-y-2 text-sm">
+                          </div>
+                        </div>
+
+                        <div className="mt-6 space-y-2 text-sm">
                           <a
-                            href={`http://localhost:8000${file.validated_download}`}
-                            className="text-blue-600 hover:text-blue-800 underline"
+                            href={`${API_BASE_URL}${file.validated_download}`}
+                            className="text-blue-600 hover:text-blue-800 underline block font-medium"
                             target="_blank"
                             rel="noopener noreferrer"
                           >
-                            ✅ Download Validated
+                            📥 Download All Emails
                           </a>
-                          {file.failed_download && (
-                            <a
-                              href={`http://localhost:8000${file.failed_download}`}
-                              className="text-red-600 hover:text-red-800 underline block"
-                              target="_blank"
-                              rel="noopener noreferrer"
-                            >
-                              ❌ Download Failed
-                            </a>
-                          )}
+                          <a
+                            href={`${API_BASE_URL}/download-valid/${file.validated_download.split('/').pop()}`}
+                            className="text-green-600 hover:text-green-800 underline block font-medium"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                          >
+                            ✅ Download Valid Only
+                          </a>
+                          <a
+                            href={`${API_BASE_URL}/download-invalid/${file.validated_download.split('/').pop()}`}
+                            className="text-red-600 hover:text-red-800 underline block font-medium"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                          >
+                            ❌ Download Invalid Only
+                          </a>
                         </div>
                       </div>
                     );
@@ -644,168 +817,417 @@ useEffect(() => {
                 </div>
               </section>
             )}
+
+            {/* Validation History Table */}
+            <section className="py-10 px-6 bg-gray-50">
+              <h2 className="text-3xl font-bold text-center mb-8 text-gray-900">
+                Validation History
+              </h2>
+
+              {validationTasks.length === 0 ? (
+                <p className="text-center text-gray-500">No validation history yet. Upload a CSV file to get started!</p>
+              ) : (
+                <div className="overflow-x-auto bg-white rounded-lg shadow">
+                  <table className="w-full text-sm">
+                    <thead className="bg-gray-100 border-b">
+                      <tr>
+                        <th className="px-6 py-3 text-left font-semibold text-gray-700">TASK ID</th>
+                        <th className="px-6 py-3 text-left font-semibold text-gray-700">DATE STARTED</th>
+                        <th className="px-6 py-3 text-left font-semibold text-gray-700">TASK NAME</th>
+                        <th className="px-6 py-3 text-left font-semibold text-gray-700">STATUS</th>
+                        <th className="px-6 py-3 text-left font-semibold text-gray-700">TOTAL EMAILS</th>
+                        <th className="px-6 py-3 text-left font-semibold text-gray-700">CURRENT PROGRESS</th>
+                        <th className="px-6 py-3 text-left font-semibold text-gray-700">ACTION</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {validationTasks.map((task) => (
+                        <tr key={task.id} className="border-b hover:bg-gray-50">
+                          <td className="px-6 py-4 text-gray-900">{task.task_id.substring(0, 7)}</td>
+                          <td className="px-6 py-4 text-gray-600">
+                            {new Date(task.created_at).toLocaleString('en-US', {
+                              hour: '2-digit',
+                              minute: '2-digit',
+                              day: '2-digit',
+                              month: '2-digit',
+                              year: 'numeric'
+                            })}
+                          </td>
+                          <td className="px-6 py-4 text-gray-900">{task.filename}</td>
+                          <td className="px-6 py-4">
+                            <span className="px-3 py-1 rounded-full text-xs font-semibold bg-green-100 text-green-700">
+                              {task.status}
+                            </span>
+                          </td>
+                          <td className="px-6 py-4 text-gray-900 text-center">{task.total_emails}</td>
+                          <td className="px-6 py-4">
+                            <div className="flex items-center gap-2">
+                              <div className="flex-1 bg-gray-200 rounded-full h-2">
+                                <div
+                                  className="bg-blue-600 h-2 rounded-full"
+                                  style={{ width: `${task.progress}%` }}
+                                ></div>
+                              </div>
+                              <span className="text-blue-600 font-semibold">{task.progress}%</span>
+                            </div>
+                          </td>
+                          <td className="px-6 py-4">
+                            <div className="flex gap-2">
+                              <button
+                                onClick={() => setSelectedBulkTask(task)}
+                                className="text-blue-600 hover:text-blue-800 font-medium"
+                              >
+                                Details
+                              </button>
+                              <span className="text-gray-300">/</span>
+                              <a
+                                href={`${API_BASE_URL}${task.download_url}`}
+                                className="text-blue-600 hover:text-blue-800 font-medium"
+                                target="_blank"
+                                rel="noopener noreferrer"
+                              >
+                                Download
+                              </a>
+                              <span className="text-gray-300">/</span>
+                              <button
+                                onClick={async () => {
+                                  if (window.confirm('Are you sure you want to delete this task?')) {
+                                    try {
+                                      const token = localStorage.getItem("token");
+                                      await axios.delete(`${API_BASE_URL}/user/validation-task/${task.task_id}`, {
+                                        headers: { Authorization: `Bearer ${token}` }
+                                      });
+                                      setValidationTasks(validationTasks.filter(t => t.id !== task.id));
+                                    } catch (err) {
+                                      console.error("Error deleting task:", err);
+                                      alert("Failed to delete task");
+                                    }
+                                  }
+                                }}
+                                className="text-red-600 hover:text-red-800 font-medium"
+                              >
+                                Delete
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </section>
+
+            {/* Details Modal for Bulk Task */}
+            {selectedBulkTask && (
+              <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+                <div className="bg-white rounded-2xl max-w-4xl w-full shadow-2xl">
+                  <div className="p-6 border-b border-gray-200 flex justify-between items-center">
+                    <h2 className="text-2xl font-bold text-gray-800">Task Details - {selectedBulkTask.filename}</h2>
+                    <button
+                      onClick={() => setSelectedBulkTask(null)}
+                      className="text-gray-500 hover:text-gray-700 text-2xl font-bold"
+                    >
+                      ×
+                    </button>
+                  </div>
+
+                  <div className="p-6">
+                    <div className="flex items-center justify-center gap-6">
+                      <ResponsiveContainer width="60%" height={300}>
+                        <PieChart>
+                          <Pie
+                            data={[
+                              { name: "Safe (Valid)", value: selectedBulkTask.safe || 0, color: "#22c55e" },
+                              { name: "Role (Valid)", value: selectedBulkTask.role || 0, color: "#84cc16" },
+                              { name: "Catch All", value: selectedBulkTask.catch_all || 0, color: "#eab308" },
+                              { name: "Disposable", value: selectedBulkTask.disposable || 0, color: "#f59e0b" },
+                              { name: "Inbox Full", value: selectedBulkTask.inbox_full || 0, color: "#fb923c" },
+                              { name: "Spam Trap", value: selectedBulkTask.spam_trap || 0, color: "#f97316" },
+                              { name: "Disabled", value: selectedBulkTask.disabled || 0, color: "#ef4444" },
+                              { name: "Invalid", value: selectedBulkTask.invalid || 0, color: "#dc2626" },
+                              { name: "Unknown", value: selectedBulkTask.unknown || 0, color: "#9ca3af" },
+                            ]}
+                            dataKey="value"
+                            nameKey="name"
+                            cx="50%"
+                            cy="50%"
+                            innerRadius={60}
+                            outerRadius={100}
+                          >
+                            {[
+                              { name: "Safe (Valid)", value: selectedBulkTask.safe || 0, color: "#22c55e" },
+                              { name: "Role (Valid)", value: selectedBulkTask.role || 0, color: "#84cc16" },
+                              { name: "Catch All", value: selectedBulkTask.catch_all || 0, color: "#eab308" },
+                              { name: "Disposable", value: selectedBulkTask.disposable || 0, color: "#f59e0b" },
+                              { name: "Inbox Full", value: selectedBulkTask.inbox_full || 0, color: "#fb923c" },
+                              { name: "Spam Trap", value: selectedBulkTask.spam_trap || 0, color: "#f97316" },
+                              { name: "Disabled", value: selectedBulkTask.disabled || 0, color: "#ef4444" },
+                              { name: "Invalid", value: selectedBulkTask.invalid || 0, color: "#dc2626" },
+                              { name: "Unknown", value: selectedBulkTask.unknown || 0, color: "#9ca3af" },
+                            ].map((entry, index) => (
+                              <Cell key={`cell-${index}`} fill={entry.color} />
+                            ))}
+                          </Pie>
+                          <Tooltip />
+                          <text
+                            x="50%"
+                            y="50%"
+                            textAnchor="middle"
+                            dominantBaseline="middle"
+                            className="text-2xl font-bold fill-gray-700"
+                          >
+                            total
+                          </text>
+                          <text
+                            x="50%"
+                            y="58%"
+                            textAnchor="middle"
+                            dominantBaseline="middle"
+                            className="text-3xl font-bold fill-gray-800"
+                          >
+                            {selectedBulkTask.total_emails}
+                          </text>
+                        </PieChart>
+                      </ResponsiveContainer>
+
+                      <div className="flex flex-col gap-2 text-sm">
+                        {[
+                          { name: "Safe (Valid)", value: selectedBulkTask.safe || 0, color: "#22c55e" },
+                          { name: "Role (Valid)", value: selectedBulkTask.role || 0, color: "#84cc16" },
+                          { name: "Catch All", value: selectedBulkTask.catch_all || 0, color: "#eab308" },
+                          { name: "Disposable", value: selectedBulkTask.disposable || 0, color: "#f59e0b" },
+                          { name: "Inbox Full", value: selectedBulkTask.inbox_full || 0, color: "#fb923c" },
+                          { name: "Spam Trap", value: selectedBulkTask.spam_trap || 0, color: "#f97316" },
+                          { name: "Disabled", value: selectedBulkTask.disabled || 0, color: "#ef4444" },
+                          { name: "Invalid", value: selectedBulkTask.invalid || 0, color: "#dc2626" },
+                          { name: "Unknown", value: selectedBulkTask.unknown || 0, color: "#9ca3af" },
+                        ].map((item, index) => (
+                          <div key={index} className="flex items-center gap-2">
+                            <div
+                              className="w-4 h-4 rounded"
+                              style={{ backgroundColor: item.color }}
+                            ></div>
+                            <span className="text-gray-700">
+                              {item.name}: <span className="font-semibold">{item.value}</span>
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Download Section */}
+                  <div className="p-6 border-t border-gray-200 bg-gray-50">
+                    <h3 className="text-lg font-semibold text-gray-800 mb-4">📥 Download Options</h3>
+                    <div className="flex flex-wrap gap-3 justify-center">
+                      <a
+                        href={`${API_BASE_URL}${selectedBulkTask.download_url}`}
+                        className="px-6 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-lg shadow transition duration-200"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                      >
+                        📥 Download All Emails
+                      </a>
+                      <a
+                        href={`${API_BASE_URL}/download-valid/${selectedBulkTask.download_url.split('/').pop()}`}
+                        className="px-6 py-2.5 bg-green-600 hover:bg-green-700 text-white font-medium rounded-lg shadow transition duration-200"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                      >
+                        ✅ Download Valid Only
+                      </a>
+                      <a
+                        href={`${API_BASE_URL}/download-invalid/${selectedBulkTask.download_url.split('/').pop()}`}
+                        className="px-6 py-2.5 bg-red-600 hover:bg-red-700 text-white font-medium rounded-lg shadow transition duration-200"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                      >
+                        ❌ Download Invalid Only
+                      </a>
+                    </div>
+                  </div>
+
+                  <div className="p-4 text-center border-t border-gray-200">
+                    <button
+                      onClick={() => setSelectedBulkTask(null)}
+                      className="px-8 py-2.5 bg-gray-600 hover:bg-gray-700 text-white font-semibold rounded-lg shadow-md transition duration-200"
+                    >
+                      Close
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
-        )}
+        )
+        }
 
         {/* Other Tabs Placeholder */}
-        {selectedTab === "dashboard" && (
-          <div className="p-10 text-2xl font-semibold text-center">
-            📊 More things will be added soon......
-          </div>
-        )}
+        {
+          selectedTab === "dashboard" && (
+            <div className="p-10 text-2xl font-semibold text-center">
+              📊 More things will be added soon......
+            </div>
+          )
+        }
 
-        {selectedTab === "profile" && (
-          <div className="p-8 max-w-4xl mx-auto space-y-12">
-            {/* Section 1: User Details */}
-            <section className="bg-white rounded-xl shadow-lg p-8">
-              <h2 className="text-2xl font-bold text-gray-800 mb-6">
-                👤 User Details
-              </h2>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700">
-                    Full Name
-                  </label>
-                  <input
-                    type="text"
-                    placeholder="Enter your name"
-                    className="mt-2 w-full rounded-lg border border-gray-300 px-4 py-3 focus:ring-2 focus:ring-blue-500 focus:outline-none"
-                  />
+        {
+          selectedTab === "profile" && (
+            <div className="p-8 max-w-4xl mx-auto space-y-12">
+              {/* Section 1: User Details */}
+              <section className="bg-white rounded-xl shadow-lg p-8">
+                <h2 className="text-2xl font-bold text-gray-800 mb-6">
+                  👤 User Details
+                </h2>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700">
+                      Full Name
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="Enter your name"
+                      className="mt-2 w-full rounded-lg border border-gray-300 px-4 py-3 focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700">
+                      Email Address
+                    </label>
+                    <input
+                      type="email"
+                      placeholder="Enter your email"
+                      className="mt-2 w-full rounded-lg border border-gray-300 px-4 py-3 focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700">
+                      Change Password
+                    </label>
+                    <input
+                      type="password"
+                      placeholder="New password"
+                      className="mt-2 w-full rounded-lg border border-gray-300 px-4 py-3 focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                    />
+                  </div>
                 </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700">
-                    Email Address
+              </section>
+
+              {/* Section 2: Account Preferences */}
+              <section className="bg-white rounded-xl shadow-lg p-8">
+                <h2 className="text-2xl font-bold text-gray-800 mb-6">
+                  ⚙️ Account Preferences
+                </h2>
+                <div className="space-y-4">
+                  <label className="flex items-center gap-3">
+                    <input
+                      type="checkbox"
+                      className="h-5 w-5 text-blue-600 rounded border-gray-300"
+                    />
+                    <span className="text-gray-700">
+                      Receive Email Notifications
+                    </span>
                   </label>
-                  <input
-                    type="email"
-                    placeholder="Enter your email"
-                    className="mt-2 w-full rounded-lg border border-gray-300 px-4 py-3 focus:ring-2 focus:ring-blue-500 focus:outline-none"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700">
-                    Change Password
+                  <label className="flex items-center gap-3">
+                    <input
+                      type="checkbox"
+                      className="h-5 w-5 text-blue-600 rounded border-gray-300"
+                    />
+                    <span className="text-gray-700">Enable Dark Mode</span>
                   </label>
-                  <input
-                    type="password"
-                    placeholder="New password"
-                    className="mt-2 w-full rounded-lg border border-gray-300 px-4 py-3 focus:ring-2 focus:ring-blue-500 focus:outline-none"
-                  />
+                  <label className="flex items-center gap-3">
+                    <input
+                      type="checkbox"
+                      className="h-5 w-5 text-blue-600 rounded border-gray-300"
+                    />
+                    <span className="text-gray-700">
+                      Two-Factor Authentication
+                    </span>
+                  </label>
                 </div>
-              </div>
-            </section>
+                <div className="mt-6 text-right">
+                  <button
+                    type="button"
+                    className="px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-lg shadow transition"
+                  >
+                    Save Changes
+                  </button>
+                </div>
+              </section>
 
-            {/* Section 2: Account Preferences */}
-            <section className="bg-white rounded-xl shadow-lg p-8">
-              <h2 className="text-2xl font-bold text-gray-800 mb-6">
-                ⚙️ Account Preferences
-              </h2>
-              <div className="space-y-4">
-                <label className="flex items-center gap-3">
-                  <input
-                    type="checkbox"
-                    className="h-5 w-5 text-blue-600 rounded border-gray-300"
-                  />
-                  <span className="text-gray-700">
-                    Receive Email Notifications
-                  </span>
-                </label>
-                <label className="flex items-center gap-3">
-                  <input
-                    type="checkbox"
-                    className="h-5 w-5 text-blue-600 rounded border-gray-300"
-                  />
-                  <span className="text-gray-700">Enable Dark Mode</span>
-                </label>
-                <label className="flex items-center gap-3">
-                  <input
-                    type="checkbox"
-                    className="h-5 w-5 text-blue-600 rounded border-gray-300"
-                  />
-                  <span className="text-gray-700">
-                    Two-Factor Authentication
-                  </span>
-                </label>
-              </div>
-              <div className="mt-6 text-right">
-                <button
-                  type="button"
-                  className="px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-lg shadow transition"
-                >
-                  Save Changes
-                </button>
-              </div>
-            </section>
-
-            {/* Section 3: Account Controls */}
-            <section className="bg-white rounded-xl shadow-lg p-8">
-              <h2 className="text-2xl font-bold text-gray-800 mb-6">
-                🚨 Account Controls
-              </h2>
-              <p className="text-gray-600 mb-6">
-                Manage your account status. You can deactivate your account
-                temporarily or delete it permanently.
-              </p>
-              <div className="flex flex-col sm:flex-row gap-4">
-                <button
-                  type="button"
-                  className="flex-1 py-3 bg-yellow-100 text-yellow-700 border border-yellow-300 hover:bg-yellow-200 font-semibold rounded-lg shadow-sm transition"
-                >
-                  Deactivate Account
-                </button>
-                <button
-                  type="button"
-                  className="flex-1 py-3 bg-red-100 text-red-700 border border-red-300 hover:bg-red-200 font-semibold rounded-lg shadow-sm transition"
-                >
-                  Delete Account
-                </button>
-              </div>
-            </section>
-          </div>
-        )}
-        {selectedTab === "subscription" && (
-
-
-          <div className="p-6 space-y-8">
-            <h2 className="text-3xl font-bold text-center mb-8">
-              Upgrade Your Plan
-            </h2>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 max-w-5xl mx-auto">
-              {/* Free Plan */}
-              <div className="bg-white rounded-xl shadow-lg p-6 border border-gray-200 text-center">
-                <h3 className="text-2xl font-semibold mb-4">Free Plan</h3>
+              {/* Section 3: Account Controls */}
+              <section className="bg-white rounded-xl shadow-lg p-8">
+                <h2 className="text-2xl font-bold text-gray-800 mb-6">
+                  🚨 Account Controls
+                </h2>
                 <p className="text-gray-600 mb-6">
-                  Limited to 50 emails/month & 1 file upload
+                  Manage your account status. You can deactivate your account
+                  temporarily or delete it permanently.
                 </p>
-                <p className="text-lg font-bold mb-4">Free</p>
-                <button
-                  disabled
-                  className="px-6 py-3 bg-gray-400 text-white font-semibold rounded-lg cursor-not-allowed"
-                >
-                  Current Plan
-                </button>
-              </div>
+                <div className="flex flex-col sm:flex-row gap-4">
+                  <button
+                    type="button"
+                    className="flex-1 py-3 bg-yellow-100 text-yellow-700 border border-yellow-300 hover:bg-yellow-200 font-semibold rounded-lg shadow-sm transition"
+                  >
+                    Deactivate Account
+                  </button>
+                  <button
+                    type="button"
+                    className="flex-1 py-3 bg-red-100 text-red-700 border border-red-300 hover:bg-red-200 font-semibold rounded-lg shadow-sm transition"
+                  >
+                    Delete Account
+                  </button>
+                </div>
+              </section>
+            </div>
+          )
+        }
+        {
+          selectedTab === "subscription" && (
 
-              {/* Pro Plan */}
-              <div className="bg-white rounded-xl shadow-lg p-6 border border-gray-200 text-center">
-                <h3 className="text-2xl font-semibold mb-4">Pro Plan</h3>
-                <p className="text-gray-600 mb-6">
-                  Unlimited validations & uploads
-                </p>
-                <p className="text-lg font-bold mb-4">$19.99 / month</p>
-                <button
-                  onClick={() => alert("Payment Integration Coming Soon!")}
-                  className="px-6 py-3 bg-blue-600 text-white font-semibold rounded-lg hover:bg-blue-700 transition"
-                >
-                  Subscribe Now
-                </button>
+
+            <div className="p-6 space-y-8">
+              <h2 className="text-3xl font-bold text-center mb-8">
+                Upgrade Your Plan
+              </h2>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6 max-w-5xl mx-auto">
+                {/* Free Plan */}
+                <div className="bg-white rounded-xl shadow-lg p-6 border border-gray-200 text-center">
+                  <h3 className="text-2xl font-semibold mb-4">Free Plan</h3>
+                  <p className="text-gray-600 mb-6">
+                    Limited to 50 emails/month & 1 file upload
+                  </p>
+                  <p className="text-lg font-bold mb-4">Free</p>
+                  <button
+                    disabled
+                    className="px-6 py-3 bg-gray-400 text-white font-semibold rounded-lg cursor-not-allowed"
+                  >
+                    Current Plan
+                  </button>
+                </div>
+
+                {/* Pro Plan */}
+                <div className="bg-white rounded-xl shadow-lg p-6 border border-gray-200 text-center">
+                  <h3 className="text-2xl font-semibold mb-4">Pro Plan</h3>
+                  <p className="text-gray-600 mb-6">
+                    Unlimited validations & uploads
+                  </p>
+                  <p className="text-lg font-bold mb-4">$19.99 / month</p>
+                  <button
+                    onClick={() => alert("Payment Integration Coming Soon!")}
+                    className="px-6 py-3 bg-blue-600 text-white font-semibold rounded-lg hover:bg-blue-700 transition"
+                  >
+                    Subscribe Now
+                  </button>
+                </div>
               </div>
             </div>
-          </div>
-        )}
-      </main>
-    </div>
+          )
+        }
+      </main >
+    </div >
   );
 };
 

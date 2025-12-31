@@ -3,6 +3,7 @@ import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import toast, { Toaster } from "react-hot-toast";
 import { useNavigate } from "react-router-dom";
+import { API_BASE_URL } from "../../config/api";
 
 const creditOptions = [
   { credits: 2000, price: 5 },
@@ -53,7 +54,7 @@ export default function BuyCredits() {
           return;
         }
 
-        const response = await fetch("http://localhost:8000/user/credits", {
+        const response = await fetch(`${API_BASE_URL}/user/credits`, {
           headers: {
             Authorization: `Bearer ${token}`,
           },
@@ -105,7 +106,7 @@ export default function BuyCredits() {
 
       console.log("📤 Sending request:", requestBody);
 
-      const response = await fetch("http://localhost:8000/api/credits/buy", {
+      const response = await fetch(`${API_BASE_URL}/api/credits/buy`, {
         method: "POST",
         headers: {
           Authorization: `Bearer ${token}`,
@@ -172,7 +173,7 @@ export default function BuyCredits() {
 
       console.log("📤 Subscription request:", requestBody);
 
-      const response = await fetch("http://localhost:8000/api/credits/subscribe", {
+      const response = await fetch(`${API_BASE_URL}/api/credits/subscribe`, {
         method: "POST",
         headers: {
           Authorization: `Bearer ${token}`,
@@ -232,7 +233,7 @@ export default function BuyCredits() {
 
       console.log("📤 Request:", requestBody);
 
-      const response = await fetch("http://localhost:8000/api/credits/buy", {
+      const response = await fetch(`${API_BASE_URL}/api/credits/buy`, {
         method: "POST",
         headers: {
           Authorization: `Bearer ${token}`,

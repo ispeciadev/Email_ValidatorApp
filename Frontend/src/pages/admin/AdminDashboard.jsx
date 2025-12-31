@@ -19,6 +19,7 @@ import {
 } from "recharts";
 import Users from "./Users";
 import axios from "axios";
+import { API_BASE_URL } from "../../config/api";
 const StatCard = ({ title, value, subtitle }) => (
   <div className="bg-white/5 border border-white/20 p-6 rounded-xl shadow-xl hover:shadow-sky-500/40 hover:scale-[1.03] transition-all duration-300">
     <p className="text-sm uppercase tracking-wide font-medium text-white/60">{title}</p>
@@ -48,8 +49,8 @@ const Dashboard = () => {
   useEffect(() => {
     const fetchSummaryData = async () => {
       try {
-        const summaryRes = await axios.get("http://127.0.0.1:8000/summary");
-        const trendRes = await axios.get("http://127.0.0.1:8000/admin/email-stats");
+        const summaryRes = await axios.get(`${API_BASE_URL}/summary`);
+        const trendRes = await axios.get(`${API_BASE_URL}/admin/email-stats`);
 
         setStats({
           total_uploads: summaryRes.data.total_uploads,

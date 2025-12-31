@@ -1,0 +1,38 @@
+# Blacklisted Domains
+# Known spam, malicious, or test domains that should be rejected
+# Updated: 2025-12-23
+
+# Test/Example domains (RFC 2606)
+example.com
+example.net
+example.org
+test.com
+test.net
+test.org
+invalid.com
+localhost.com
+
+# Known spam domains
+spam.com
+junk.com
+spambob.com
+spambog.com
+mailinator.net
+reject.com
+blacklisted.com
+spam.la
+spam.su
+spambox.com
+spamhole.com
+spaminator.com
+spaml.com
+spammotel.com
+spamoff.de
+spamthis.co.uk
+
+# Malicious/Suspicious domains
+fakeinbox.net
+fakemail.com
+throwaway.email
+trash-mail.com
+guerrillamail.net

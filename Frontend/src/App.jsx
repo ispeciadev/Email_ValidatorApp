@@ -21,10 +21,11 @@ import Contact from "./pages/Companypages/Contact";
 import Security from "./pages/Companypages/Security";
 import Reviews from "./pages/Companypages/Reviews";
 import Footer from "./components/global/Footer";
-import ProtectedAdminRoute from "./components/ProtectedadminRoute";
+import ProtectedAdminRoute from "./components/ProtectedAdminRoute";
 import ErrorPage from "./pages/Error";
 import ProtectedUserRoute from "./components/ProtectedUserRoute";
 import { CreditsProvider } from "./pages/ui/CreditsContext";
+import UserProfile from "./pages/ui/UserProfile";
 function App() {
   return (
     <Router>
@@ -38,6 +39,14 @@ function App() {
             element={
               <ProtectedUserRoute>
                 <Dashboard />
+              </ProtectedUserRoute>
+            }
+          />
+          <Route
+            path="/profile"
+            element={
+              <ProtectedUserRoute>
+                <UserProfile />
               </ProtectedUserRoute>
             }
           />

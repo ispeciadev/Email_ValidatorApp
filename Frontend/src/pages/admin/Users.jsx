@@ -8,6 +8,7 @@ import {
   FaEdit,
   FaCoins,
 } from "react-icons/fa";
+import { API_BASE_URL } from "../../config/api";
 
 const UsersTab = () => {
   const [users, setUsers] = useState([]);
@@ -20,7 +21,7 @@ const UsersTab = () => {
   const fetchUsers = async () => {
     setLoading(true);
     try {
-      const res = await axios.get("http://localhost:8000/admin/users");
+      const res = await axios.get(`${API_BASE_URL}/admin/users`);
       setUsers(res.data);
     } catch (err) {
       console.error("Error fetching users:", err);
@@ -35,7 +36,7 @@ const UsersTab = () => {
 
   const toggleBlock = async (id, blocked) => {
     try {
-      await axios.post("http://127.0.0.1:8000/admin/block-user", {
+      await axios.post(`${API_BASE_URL}/admin/block-user`, {
         id,
         blocked: !blocked,
       });
@@ -48,7 +49,7 @@ const UsersTab = () => {
   const deleteUser = async (id) => {
     if (!window.confirm("Are you sure to delete this user?")) return;
     try {
-      await axios.delete(`http://127.0.0.1:8000/admin/delete-user/${id}`);
+      await axios.delete(`${API_BASE_URL}/admin/delete-user/${id}`);
       fetchUsers();
     } catch (err) {
       console.error(err);
@@ -57,7 +58,7 @@ const UsersTab = () => {
 
   const updateUser = async () => {
     try {
-      await axios.put("http://127.0.0.1:8000/admin/update-user", editUser);
+      await axios.put(`${API_BASE_URL}/admin/update-user`, editUser);
       setEditUser(null);
       fetchUsers();
     } catch (err) {
@@ -75,7 +76,7 @@ const handleAddCredits = async () => {
     console.log("🔍 Adding credits:", credits, "to user:", addCreditsModal.id);
 
     const response = await axios.post(
-      "http://127.0.0.1:8000/api/add-credits",
+      `${API_BASE_URL}/api/add-credits`,
       {
         user_id: addCreditsModal.id,
         credits: credits,

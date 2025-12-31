@@ -1,0 +1,23 @@
+email,syntax_valid,domain_exists,mx_record_exists,role_based,disposable,smtp_valid,blacklist,catch_all,status,verdict
+plainaddress,Not Valid,Not Valid,False,No,No,not_checked,No,No,Invalid,Invalid
+missingatsign.com,Not Valid,Not Valid,False,No,No,not_checked,No,No,Invalid,Invalid
+john.doe@gmail.com,Valid,Valid,False,No,No,mailbox_not_found,No,No,Invalid,Invalid
+user name@gmail.com,Not Valid,Not Valid,False,No,No,not_checked,No,No,Invalid,Invalid
+abc..test@gmail.com,Not Valid,Not Valid,False,No,No,not_checked,No,No,Invalid,Invalid
+ssharma636076@gmail.com,Valid,Valid,False,No,No,deliverable,No,No,Valid,Valid
+shivasharmamoz123123@gmail.com,Valid,Valid,False,No,No,deliverable,No,No,Valid,Valid
+shiva.sharma@company.co.in,Valid,Not Valid,False,No,No,not_checked,No,No,Invalid,Invalid
+user_123@yahoo.com,Valid,Valid,False,No,No,connection_failed,No,No,Invalid,Invalid
+support@my-site.org,Valid,Valid,False,Yes,No,connection_failed,No,No,Invalid,Invalid
+test.email+filter@outlook.com,Valid,Valid,False,No,No,connection_failed,No,No,Invalid,Invalid
+@missingusername.com,Not Valid,Not Valid,False,No,No,not_checked,No,No,Invalid,Invalid
+user@.com,Not Valid,Not Valid,False,No,No,not_checked,No,No,Invalid,Invalid
+user@domain,Not Valid,Not Valid,False,No,No,not_checked,No,No,Invalid,Invalid
+user@domain..com,Not Valid,Not Valid,False,No,No,not_checked,No,No,Invalid,Invalid
+"user@domain,com",Not Valid,Not Valid,False,No,No,not_checked,No,No,Invalid,Invalid
+valid_email123@proton.me,Valid,Valid,False,No,No,connection_failed,No,No,Invalid,Invalid
+hello.world@sub.domain.com,Valid,Not Valid,False,No,No,not_checked,No,No,Invalid,Invalid
+test@-domain.com,Not Valid,Not Valid,False,No,No,not_checked,No,No,Invalid,Invalid
+name@domain.c,Not Valid,Not Valid,False,No,No,not_checked,No,No,Invalid,Invalid
+name@domain.toolongtld,Valid,Not Valid,False,No,No,not_checked,No,No,Invalid,Invalid
+name@domain.com,Valid,Valid,False,No,No,mailbox_not_found,No,No,Invalid,Invalid

@@ -1,0 +1,16 @@
+email,syntax_valid,domain_exists,mx_record_exists,role_based,disposable,smtp_valid,blacklist,catch_all,status,verdict
+john.doe@gmail.com,Valid,Valid,False,No,No,accepted_by_mx,No,No,Valid,Valid
+sales@mybusiness.com,Valid,Valid,False,Yes,No,connect_timeout,No,No,Valid,Valid
+support@outlook.com,Valid,Valid,False,Yes,No,accepted_by_mx,No,No,Role-Based,Role-Based
+info@yahoo.com,Valid,Valid,False,Yes,No,accepted_by_mx,No,No,Role-Based,Role-Based
+user.name+tag@gmail.com,Valid,Valid,False,No,No,connect_timeout,No,No,Invalid,Invalid
+temp123@tempmail.com,Valid,Not Valid,False,No,Yes,not_checked,No,No,Disposable,Disposable
+abc@10minutemail.net,Valid,Valid,False,No,No,connect_timeout,No,No,Valid,Valid
+fakebox@throwawaymail.com,Valid,Not Valid,False,No,Yes,not_checked,No,No,Disposable,Disposable
+admin@company,Not Valid,Not Valid,False,No,No,not_checked,No,No,Invalid,Invalid
+user@@gmail.com,Not Valid,Not Valid,False,No,No,not_checked,No,No,Invalid,Invalid
+@gmail.com,Not Valid,Not Valid,False,No,No,not_checked,No,No,Invalid,Invalid
+user@gmail..com,Not Valid,Not Valid,False,No,No,not_checked,No,No,Invalid,Invalid
+ceo@myrealstartup.com,Valid,Not Valid,False,No,No,not_checked,No,No,Unknown,Unknown
+contact@unknownnewdomain.xyz,Valid,Not Valid,False,Yes,No,not_checked,No,No,Unknown,Unknown
+noreply@fake-domain-123456.com,Valid,Not Valid,False,Yes,No,not_checked,No,No,Unknown,Unknown

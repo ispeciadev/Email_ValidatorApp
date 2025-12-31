@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { motion } from "framer-motion";
 import { FaEye, FaEyeSlash } from "react-icons/fa";
 import axios from "axios";
+import { API_BASE_URL } from "../../config/api";
 
 const SubscriberLogin = () => {
   const navigate = useNavigate();
@@ -20,7 +21,7 @@ const SubscriberLogin = () => {
     setLoading(true);
 
     try {
-      const response = await axios.post("http://localhost:8000/subscriber/login", {
+      const response = await axios.post(`${API_BASE_URL}/subscriber/login`, {
         email,
         password,
       });

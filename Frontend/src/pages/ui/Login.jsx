@@ -3,7 +3,9 @@ import { FaEye, FaEyeSlash, FaLock, FaCheckCircle } from 'react-icons/fa';
 import AOS from 'aos';
 import axios from 'axios';
 import 'aos/dist/aos.css';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
+import { API_BASE_URL } from '../../config/api';
+
 
 const Login = () => {
   const [showPassword, setShowPassword] = useState(false);
@@ -12,6 +14,7 @@ const Login = () => {
   const [passwordError, setPasswordError] = useState('');
   const [errorMessage, setErrorMessage] = useState('');
   const navigate = useNavigate();
+  const location = useLocation();
 
   const togglePassword = () => setShowPassword(!showPassword);
 
@@ -25,6 +28,18 @@ const Login = () => {
     );
   };
 
+  // Pre-fill email and password from signup redirect
+  useEffect(() => {
+    if (location.state?.email) {
+      setEmail(location.state.email);
+    }
+    if (location.state?.password) {
+      setPassword(location.state.password);
+      // Validate the pre-filled password
+      validatePassword(location.state.password);
+    }
+  }, [location]);
+
   useEffect(() => {
     AOS.init({ duration: 1000, once: true });
   }, []);
@@ -34,7 +49,7 @@ const Login = () => {
   if (passwordError) return;
 
   try {
-    const response = await axios.post("http://localhost:8000/login", {
+    const response = await axios.post(`${API_BASE_URL}/login`, {
       email,
       password,
     });
@@ -42,6 +57,8 @@ const Login = () => {
     // Save all useful data in localStorage
     const token  = response.data.token;
    localStorage.setItem("token", token);
+    localStorage.setItem("username", response.data.name);
+    localStorage.setItem("email", response.data.email);
     localStorage.setItem("user", JSON.stringify({
       id: response.data.id,
       role: response.data.role
@@ -92,6 +109,7 @@ const Login = () => {
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 placeholder="you@example.com"
+                autoComplete="email"
                 className="w-full px-5 py-3 rounded-xl border border-gray-300 bg-white text-base text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500 shadow-sm transition-all duration-300 hover:border-blue-400"
               />
             </div>
@@ -106,6 +124,7 @@ const Login = () => {
                 value={password}
                 onChange={(e) => validatePassword(e.target.value)}
                 className="w-full px-5 py-3 pr-12 rounded-xl border border-gray-300 bg-white text-base text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500 shadow-sm transition-all duration-300 hover:border-blue-400"
+                autoComplete="current-password"
               />
               <button
                 type="button"

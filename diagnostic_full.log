@@ -1,0 +1,12 @@
+Traceback (most recent call last):
+  File "/home/Abhi/Downloads/Email_ValidatorApp-main/test_smtp_connection.py", line 33, in test_connection
+    await smtp.ehlo("mail-validator.com")
+          ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^
+TypeError: SMTP.ehlo() takes 1 positional argument but 2 were given
+Attempting to connect to gmail-smtp-in.l.google.com:25...
+Resolved gmail-smtp-in.l.google.com to 74.125.24.27
+Successfully connected via TCP socket!
+Starting full SMTP handshake...
+Connected!
+Sending EHLO...
+Connection failed: TypeError: SMTP.ehlo() takes 1 positional argument but 2 were given

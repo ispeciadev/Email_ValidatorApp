@@ -1,0 +1,23 @@
+id,email
+1,john.doe@gmail.com
+2,shiva.sharma@company.co.in
+3,user_123@yahoo.com
+4,support@my-site.org
+5,test.email+filter@outlook.com
+6,plainaddress
+7,@missingusername.com
+8,missingatsign.com
+9,user@.com
+10,user@domain
+11,user@domain..com
+12,user name@gmail.com
+13,"user@domain,com"
+14,valid_email123@proton.me
+15,hello.world@sub.domain.com
+16,abc..test@gmail.com
+17,test@-domain.com
+18,name@domain.c
+19,name@domain.toolongtld
+20,name@domain.com
+21,ssharma636076@gmail.com
+22,shivasharmamoz123123@gmail.com

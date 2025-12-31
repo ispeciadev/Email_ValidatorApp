@@ -1,10 +1,14 @@
 import { useState, useEffect } from "react";
+import { useNavigate } from "react-router-dom";
 import { FaEye, FaEyeSlash, FaTimesCircle, FaCheckCircle, FaExclamationTriangle } from "react-icons/fa";
 import AOS from "aos";
 import "aos/dist/aos.css";
 import axios from "axios";
+import { API_BASE_URL } from "../../config/api";
+
 
 const Signup = () => {
+  const navigate = useNavigate();
   const [showPassword, setShowPassword] = useState(false);
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
@@ -38,16 +42,19 @@ const Signup = () => {
     if (!name || !email || !password || passwordError) return;
 
     try {
-      const res = await axios.post("http://localhost:8000/signup", {
+      const res = await axios.post(`${API_BASE_URL}/signup`, {
         name,
         email,
         password,
         role: "user",
       });
-      setAlert({ msg: res.data.message || "Signup successful!", isError: false, visible: true });
-      setName("");
-      setEmail("");
-      setPassword("");
+      setAlert({ msg: res.data.message || "Signup successful! Redirecting to login...", isError: false, visible: true });
+      
+      // Redirect to login page after 1.5 seconds with pre-filled email and password
+      // Note: Pre-filling password is not recommended for production security
+      setTimeout(() => {
+        navigate('/login', { state: { email: email, password: password } });
+      }, 1500);
     } catch (err) {
       const message = err.response?.data?.detail || "Server error. Please try again.";
       setAlert({ msg: message, isError: true, visible: true });
@@ -119,6 +126,7 @@ const Signup = () => {
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 required
+                autoComplete="email"
                 className="w-full px-5 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none transition"
               />
             </div>
@@ -132,6 +140,7 @@ const Signup = () => {
                 onChange={(e) => validatePassword(e.target.value)}
                 required
                 className="w-full px-5 py-3 pr-12 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none transition"
+                autoComplete="new-password"
               />
               <button
                 type="button"

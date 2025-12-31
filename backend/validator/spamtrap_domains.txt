@@ -1,0 +1,29 @@
+# Known Spamtrap Domains
+# These domains are known to be associated with spamtrap operations
+# Updated: 2025-12-31
+
+# Known spamtrap providers and honeypot domains
+spamtrap.org
+spamtraps.net
+spam-trap.com
+honeypot.email
+blackhole.email
+trap.email
+spamhole.com
+spamcop.net
+projecthoneypot.org
+abuseat.org
+antispam.org
+
+# Domains commonly used for spamtraps
+devnull.email
+null.email
+void.email
+blackhole.io
+sinkhole.email
+
+# Known spamtrap patterns (providers that create spamtraps)
+spamtrap.io
+honeytrap.net
+emailtrap.com
+spamsink.net

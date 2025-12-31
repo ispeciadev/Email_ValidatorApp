@@ -1,0 +1,16 @@
+email,syntax_valid,domain_exists,mx_record_exists,role_based,disposable,smtp_valid,blacklist,catch_all,status,verdict
+invalid-email,Not Valid,Not Valid,False,No,No,not_checked,No,No,Invalid,Invalid
+john.doe@gmail.com,Valid,Valid,False,No,No,mailbox_not_found,No,No,Invalid,Invalid
+alice.smith@outlook.com,Valid,Valid,False,No,No,connection_failed,No,No,Invalid,Invalid
+admin@company.com,Valid,Valid,False,Yes,No,connection_failed,No,No,Invalid,Invalid
+support@university.edu,Valid,Valid,False,Yes,No,connection_failed,No,No,Invalid,Invalid
+randomuser@catchall-domain.test,Valid,Not Valid,False,No,No,not_checked,No,No,Invalid,Invalid
+abc123@catchall-domain.test,Valid,Not Valid,False,No,No,not_checked,No,No,Invalid,Invalid
+tempuser@tempmail.com,Valid,Valid,False,No,Yes,deliverable,No,Yes,Invalid,Invalid
+fake123@10minutemail.com,Valid,Valid,False,No,Yes,connection_failed,No,No,Invalid,Invalid
+fullbox@quota-full.test,Valid,Not Valid,False,No,No,not_checked,No,No,Invalid,Invalid
+disabled.user@disabled-mail.test,Valid,Not Valid,False,No,No,not_checked,No,No,Invalid,Invalid
+trap@spamtrap-domain.test,Valid,Not Valid,False,No,No,not_checked,No,No,Invalid,Invalid
+user@@domain.com,Not Valid,Not Valid,False,No,No,not_checked,No,No,Invalid,Invalid
+user@nonexistentdomainxyzabc.com,Valid,Not Valid,False,No,No,not_checked,No,No,Invalid,Invalid
+unknown@greylist-domain.test,Valid,Not Valid,False,No,No,not_checked,No,No,Invalid,Invalid
