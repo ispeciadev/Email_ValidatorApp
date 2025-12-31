@@ -11,14 +11,18 @@ from pathlib import Path
 
 # ======================= CONFIGURATION =======================
 
-# Timeouts (AGGRESSIVE for speed - was 3-5s, now 0.5-1.5s)
-DNS_TIMEOUT = 0.5  # seconds (was 3)
-SMTP_TIMEOUT = 1.5  # seconds (was 5)
-SOCKET_TIMEOUT = 0.5  # seconds (was 3)
+# Timeouts (ULTRA-AGGRESSIVE for maximum speed)
+DNS_TIMEOUT = 0.3  # seconds - ultra-fast DNS lookups
+SMTP_TIMEOUT = 0.5  # seconds - minimal SMTP timeout (mostly disabled)
+SOCKET_TIMEOUT = 0.3  # seconds - quick socket checks
 
-# Retry settings - REDUCED for speed
-DNS_RETRIES = 1  # (was 2)
-SMTP_RETRIES = 1  # Try only 1 MX host (was 2)
+# Retry settings - MINIMAL for speed
+DNS_RETRIES = 1  # Single attempt only
+SMTP_RETRIES = 0  # No SMTP retries
+
+# SMTP Verification - DISABLED for maximum speed (DNS/MX checks only)
+ENABLE_SMTP_VERIFICATION = False  # Set to True for deep verification (slower)
+MAX_CONCURRENT = 200  # Increased from 100 for parallel processing
 
 # Cache for performance optimization
 _domain_cache = {}  # Cache MX and catch-all results per domain
@@ -549,7 +553,7 @@ def multi_layer_validate(email: str) -> Dict[str, Any]:
     # Check for specific failure reasons (priority order)
     if not syntax_valid:
         reason = syntax_reason if syntax_reason else "Invalid syntax"
-    elif not domain: # If domain could not be extracted due to format issues
+    elif not domain:  # If domain could not be extracted due to format issues
         reason = "Invalid email format"
     elif not domain_exists:
         reason = domain_reason if domain_reason else "Domain does not exist"
@@ -565,23 +569,29 @@ def multi_layer_validate(email: str) -> Dict[str, Any]:
         reason = "Inbox Full"
     elif is_disabled:
         reason = "Mailbox Disabled"
-    elif is_unknown:
-        reason = "Unknown (SMTP verification inconclusive)"
-    elif not smtp_result["valid"]:
-        reason = smtp_result["status"].replace('_', ' ').title()
-    elif smtp_result["valid"]:
-        # All checks passed!
-        status = "Valid"
-        reason = "Deliverable"
+    elif ENABLE_SMTP_VERIFICATION and not smtp_result["valid"]:
+        # Only check SMTP if it's enabled
+        if is_unknown:
+            reason = "Unknown (SMTP verification inconclusive)"
+        else:
+            reason = smtp_result["status"].replace('_', ' ').title()
+    else:
+        # If SMTP is disabled OR SMTP passed, mark as valid
+        # (DNS/MX/Disposable checks are sufficient)
+        status = "VALID"
+        if is_role_based:
+            reason = "Deliverable (Role-based)"
+        else:
+            reason = "Deliverable"
     
     # Update result with final status
     result["status"] = status
     result["verdict"] = status
     result["reason"] = reason
-    result["is_valid"] = (status == "Valid")
+    result["is_valid"] = (status == "VALID")
     
     # Set scores
-    if status == "Valid":
+    if status == "VALID":
         result["deliverability_score"] = 95
         result["quality_grade"] = "A"
     else:
