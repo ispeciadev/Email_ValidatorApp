@@ -60,17 +60,16 @@ def classify_status_reoon(
 
     # --- PHASE 2: SCORING (Weak Signals) ---
     
-    # Base points for passing basic checks (Syntax + MX pass)
-    # Refined: 70 is the starting point (RISKY threshold)
-    score = 70
+    # Base points for passing basic checks (Syntax + MX pass and not in blacklist)
+    score = 80
     reason = "deliverable"
     
-    # Role account penalty
+    # Role account penalty (Moves to RISKY if score drops below 80)
     if p1.get("is_role"):
-        score -= 5
+        score -= 10
         reason = "role_based"
 
-    # Catch-all penalty
+    # Catch-all penalty (Moves to RISKY)
     if p4 and p4.get("is_catch_all"):
         score -= 10
         reason = "catch_all"
@@ -80,15 +79,13 @@ def classify_status_reoon(
         score -= 30
         reason = "mailbox_full"
 
-    # SMTP Success bonus (Crucial for VALID status)
-    # Passing 70 (RISKY) + 25 (BONUS) = 95 (VALID)
+    # SMTP Success bonus
     if smtp_code == 250:
-        score += 25
-        reason = "deliverable"
+        score += 10 # Solidify valid status
 
     # SMTP Timeout/Error/Blocked (Weak Signal - No Penalty)
-    # If Render blocks SMTP, we stay at the base score of 70 (RISKY).
-    # This correctly identifies that we couldn't verify the mailbox.
+    # If Render blocks SMTP, we still maintain the base score of 80 (VALID) 
+    # as long as the Syntax and MX are valid.
 
     # Cap score at 100
     score = min(max(score, 0), 100)

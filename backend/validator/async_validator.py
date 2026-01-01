@@ -47,19 +47,22 @@ def load_domain_list(filename: str) -> set:
 DISPOSABLE_DOMAINS = load_domain_list('disposable_domains.txt')
 BLACKLIST_DOMAINS = load_domain_list('blacklist_domains.txt')
 
-# Provider behavior table (Accuracy Priority)
+# Provider behavior table (Principal Architect Constraints)
 PROVIDER_RULES = {
     "google": {
-        "smtp_check": True,
-        "catch_all": False
+        "smtp_check": False,
+        "catch_all": False,
+        "default_status": "unknown"
     },
     "microsoft": {
-        "smtp_check": True,
-        "catch_all": False
+        "smtp_check": False,
+        "catch_all": False,
+        "default_status": "unknown"
     },
     "yahoo": {
-        "smtp_check": True,
-        "catch_all": False
+        "smtp_check": False,
+        "catch_all": False,
+        "default_status": "unknown"
     },
     "custom": {
         "smtp_check": True,

@@ -728,14 +728,13 @@ const Dashboard = () => {
                     // Enhanced data with all categories - SHOW ALL EVEN IF 0
                     const detailedData = [
                       { name: "Safe (Valid)", value: file.safe || 0, color: "#22c55e" },
-                      { name: "Role (Valid)", value: file.role || 0, color: "#84cc16" },
+                      { name: "Role-based", value: file.role || 0, color: "#84cc16" },
                       { name: "Catch All", value: file.catch_all || 0, color: "#eab308" },
                       { name: "Disposable", value: file.disposable || 0, color: "#f59e0b" },
                       { name: "Inbox Full", value: file.inbox_full || 0, color: "#fb923c" },
-                      { name: "Spam Trap", value: file.spam_trap || 0, color: "#f97316" },
                       { name: "Disabled", value: file.disabled || 0, color: "#ef4444" },
                       { name: "Invalid", value: file.invalid || 0, color: "#dc2626" },
-                      { name: "Unknown", value: file.unknown || 0, color: "#9ca3af" },
+                      { name: "Risky", value: file.unknown || 0, color: "#f97316" },
                     ]; // Show all categories, even with 0 values
 
                     return (
