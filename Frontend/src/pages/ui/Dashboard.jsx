@@ -498,15 +498,25 @@ const Dashboard = () => {
               {singleResult && (
                 <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 animate-fade-in p-4">
                   <div className="bg-white rounded-2xl max-w-4xl w-full shadow-2xl">
-                    {/* Header with Status Icon */}
-                    <div className="text-center py-6 border-b border-gray-200">
+                    {/* Header with Status Icon and Close Button */}
+                    <div className="relative text-center py-6 border-b border-gray-200">
+                      <button
+                        onClick={() => setSingleResult(null)}
+                        className="absolute top-4 right-4 text-gray-400 hover:text-gray-600 transition-colors"
+                        aria-label="Close modal"
+                      >
+                        <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                        </svg>
+                      </button>
+
                       <div className="inline-flex items-center justify-center w-20 h-20 rounded-full bg-green-100 mb-3">
                         <svg className="w-10 h-10 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
                         </svg>
                       </div>
                       <h2 className="text-3xl font-bold text-gray-800 uppercase tracking-wide">
-                        {singleResult.status || 'SAFE'}
+                        {singleResult.status || 'VALIDATION RESULT'}
                       </h2>
                     </div>
 
@@ -520,77 +530,80 @@ const Dashboard = () => {
 
                         <div className="flex justify-between py-2 border-b border-gray-100">
                           <span className="font-semibold text-gray-600">status:</span>
-                          <span className="text-green-600 italic">{singleResult.status?.toLowerCase() || 'safe'}</span>
-                        </div>
-
-                        <div className="flex justify-between py-2 border-b border-gray-100">
-                          <span className="font-semibold text-gray-600">overall_score:</span>
-                          <span className="text-gray-800 italic">{singleResult.deliverability_score || singleResult.score || 98}/100</span>
+                          <span className={`font-medium italic ${
+                            (singleResult.status === 'valid' || singleResult.status === 'role') ? 'text-green-600' :
+                            (singleResult.status === 'invalid' || singleResult.status === 'disposable' || singleResult.status === 'spamtrap') ? 'text-red-600' :
+                            (singleResult.status === 'catch_all' || singleResult.status === 'inbox_full') ? 'text-yellow-600' : 'text-blue-600'
+                          }`}>{singleResult.status || 'unknown'}</span>
                         </div>
 
                         <div className="flex justify-between py-2 border-b border-gray-100">
                           <span className="font-semibold text-gray-600">is_safe_to_send:</span>
-                          <span className="text-green-600 italic">{singleResult.is_valid ? 'true' : 'false'}</span>
+                          <span className={singleResult.is_valid ? "text-green-600 italic" : "text-red-600 italic"}>
+                            {singleResult.is_valid ? 'true' : 'false'}
+                          </span>
                         </div>
 
                         <div className="flex justify-between py-2 border-b border-gray-100">
                           <span className="font-semibold text-gray-600">is_valid_syntax:</span>
-                          <span className="text-green-600 italic">
-                            {singleResult.syntax_valid === 'Valid' || singleResult.regex === 'Valid' ? 'true' : 'false'}
+                          <span className={singleResult.syntax_valid ? "text-green-600 italic" : "text-red-600 italic"}>
+                            {singleResult.syntax_valid ? 'true' : 'false'}
                           </span>
                         </div>
 
                         <div className="flex justify-between py-2 border-b border-gray-100">
                           <span className="font-semibold text-gray-600">is_disposable:</span>
-                          <span className="text-green-600 italic">
-                            {singleResult.disposable === 'Yes' ? 'true' : 'false'}
+                          <span className={singleResult.is_disposable ? "text-red-600 italic" : "text-green-600 italic"}>
+                            {singleResult.is_disposable ? 'true' : 'false'}
                           </span>
                         </div>
 
                         <div className="flex justify-between py-2 border-b border-gray-100">
                           <span className="font-semibold text-gray-600">is_role_account:</span>
-                          <span className="text-green-600 italic">
-                            {singleResult.role_based === 'Yes' ? 'true' : 'false'}
+                          <span className={singleResult.is_role_account ? "text-yellow-600 italic" : "text-green-600 italic"}>
+                            {singleResult.is_role_account ? 'true' : 'false'}
                           </span>
                         </div>
 
                         <div className="flex justify-between py-2 border-b border-gray-100">
                           <span className="font-semibold text-gray-600">mx_accepts_mail:</span>
-                          <span className="text-green-600 italic">
-                            {singleResult.mx_record_exists === 'Valid' || singleResult.mx === 'Valid' ? 'true' : 'false'}
+                          <span className={singleResult.mx_valid ? "text-green-600 italic" : "text-red-600 italic"}>
+                            {singleResult.mx_valid ? 'true' : 'false'}
                           </span>
                         </div>
 
                         <div className="flex justify-between py-2 border-b border-gray-100">
                           <span className="font-semibold text-gray-600">mx_records:</span>
                           <span className="text-gray-600 italic text-sm truncate max-w-md">
-                            {singleResult.mx_records || 'alt4.gmail-smtp-in.l.google.com, [...]'}
+                            {singleResult.mx_records || 'MX record found'}
                           </span>
                         </div>
 
                         <div className="flex justify-between py-2 border-b border-gray-100">
                           <span className="font-semibold text-gray-600">can_connect_smtp:</span>
-                          <span className="text-green-600 italic">
-                            {singleResult.smtp_valid === 'Valid' || singleResult.smtp === 'Valid' ? 'true' : 'false'}
+                          <span className={singleResult.smtp === 'Valid' ? "text-green-600 italic" : "text-gray-500 italic"}>
+                            {singleResult.smtp === 'Valid' ? 'true' : 'false'}
                           </span>
                         </div>
 
                         <div className="flex justify-between py-2 border-b border-gray-100">
                           <span className="font-semibold text-gray-600">has_inbox_full:</span>
-                          <span className="text-green-600 italic">false</span>
+                          <span className={singleResult.status === 'inbox_full' ? "text-red-600 italic" : "text-green-600 italic"}>
+                            {singleResult.status === 'inbox_full' ? 'true' : 'false'}
+                          </span>
                         </div>
 
                         <div className="flex justify-between py-2 border-b border-gray-100">
                           <span className="font-semibold text-gray-600">is_catch_all:</span>
-                          <span className="text-green-600 italic">
-                            {singleResult.catch_all === 'Yes' ? 'true' : 'false'}
+                          <span className={singleResult.is_catch_all ? "text-yellow-600 italic" : "text-green-600 italic"}>
+                            {singleResult.is_catch_all ? 'true' : 'false'}
                           </span>
                         </div>
 
                         <div className="flex justify-between py-2 border-b border-gray-100">
                           <span className="font-semibold text-gray-600">is_deliverable:</span>
-                          <span className="text-green-600 italic">
-                            {singleResult.smtp_valid === 'Valid' || singleResult.smtp === 'Valid' ? 'true' : 'false'}
+                          <span className={singleResult.is_valid ? "text-green-600 italic" : "text-red-600 italic"}>
+                            {singleResult.is_valid ? 'true' : 'false'}
                           </span>
                         </div>
 
@@ -607,15 +620,7 @@ const Dashboard = () => {
                     </div>
                   </div>
 
-                  {/* Close Button */}
-                  <div className="p-4 text-center border-t border-gray-200">
-                    <button
-                      onClick={() => setSingleResult(null)}
-                      className="px-8 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-lg shadow-md transition duration-200"
-                    >
-                      OK
-                    </button>
-                  </div>
+                  {/* Removed OK button per requirements */}
                 </div>
               )}
               {singleTimeTaken !== null && (

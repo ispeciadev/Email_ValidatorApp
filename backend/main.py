@@ -119,27 +119,25 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
-# Get frontend URL from environment variable for production
-FRONTEND_URL = os.getenv("FRONTEND_URL", "")
+# Allowed origins for CORS - support both local and production
+ALLOWED_ORIGINS = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://localhost:5174",
+    "http://127.0.0.1:5174",
+    "https://email-validator-frontend.onrender.com",
+    "https://email-validatorapp.onrender.com",
+    "https://email-validatorapp-frontend.onrender.com",
+]
+
+# Add FRONTEND_URL from env if set
+FRONTEND_URL = os.getenv("FRONTEND_URL")
+if FRONTEND_URL and FRONTEND_URL not in ALLOWED_ORIGINS:
+    ALLOWED_ORIGINS.append(FRONTEND_URL)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-        "http://localhost:5174",
-        "http://127.0.0.1:5174",
-        "https://email-validator-frontend.onrender.com", # Potential production frontend URL
-        FRONTEND_URL,  # Production frontend URL from environment
-        "*"  # Allow all origins for initial deployment (tighten after testing)
-    ] if FRONTEND_URL else [
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-        "http://localhost:5174",
-        "http://127.0.0.1:5174",
-        "https://email-validator-frontend.onrender.com",
-        "*"  # Development: allow all
-    ],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -178,37 +176,30 @@ async def process_emails_async(emails: List[str], batch_id: str = None, validati
         print(f"PERF: Validated {len(emails)} emails in {elapsed:.2f}s ({len(emails)/max(elapsed, 0.001):.1f} emails/sec)")
         
         total = len(results)
-        valid = sum(1 for r in results if r.get("status") == "VALID")
-        invalid = total - valid
-        failed_emails = [r.get("email") for r in results if r.get("status") != "VALID"]
+        # Safe (Valid) and Role (Valid) are considered 'valid' for general counts
+        valid_statuses = ("valid", "role")
+        valid = sum(1 for r in results if r.get("status") in valid_statuses)
+        invalid = sum(1 for r in results if r.get("status") == "invalid")
+        # Everything else (unknown, catch_all, etc.) is in the middle but counted as 'invalid' for the simple valid/invalid split
+        failed_emails = [r.get("email") for r in results if r.get("status") not in ("valid", "role")]
         
         return results, total, valid, invalid, failed_emails
     
-    # Existing validator logic for fast/strict modes
-    # Ensure validator is initialized
+    # Existing validator logic fallback (should rarely hit with os.env async mode)
     if _async_validator is None:
         _async_validator = await get_validator()
     
     start_time = time.time()
-    
     if validation_type == "bulk" or len(emails) > 1:
-        # Use bulk validation for multiple emails
         results = await _async_validator.validate_bulk(emails, batch_id)
     else:
-        # Single email validation
         result = await _async_validator.validate_email(emails[0])
-        if batch_id:
-            result["batch_id"] = batch_id
         results = [result]
     
-    elapsed = time.time() - start_time
-    print(f"PERF: Validated {len(emails)} emails in {elapsed:.2f}s ({len(emails)/max(elapsed, 0.001):.1f} emails/sec)")
-    
     total = len(emails)
-    # Reoon-style statuses: 'safe' and 'role' are valid emails
-    valid = sum(1 for r in results if r.get("status") in ("safe", "role", "Valid", "valid"))
+    valid = sum(1 for r in results if str(r.get("status")).lower() in ("valid", "safe", "role"))
     invalid = total - valid
-    failed_emails = [r.get("email") for r in results if r.get("status") not in ("safe", "role", "Valid", "valid")]
+    failed_emails = [r.get("email") for r in results if str(r.get("status")).lower() not in ("valid", "safe", "role")]
     
     return results, total, valid, invalid, failed_emails
 
@@ -411,8 +402,8 @@ async def validate_emails(
 
                 results, total, valid, invalid, _ = await process_emails_async(emails, batch_id=batch_id, validation_type="bulk")
                 
-                # REQ: Deduct only for non-error results
-                successful_results = [r for r in results if r.get("status") not in ["Error", "Unknown"]]
+                # REQ: Deduct only for non-error results (anything that gives a status)
+                successful_results = [r for r in results if r.get("status") not in ["unknown", "error"]]
                 deduction_count = len(successful_results)
                 
                 if deduction_count > 0:
@@ -437,89 +428,47 @@ async def validate_emails(
                         user_id=current_user.id
                     ))
                 
-                # Calculate detailed category counts for visualization
-                # Each email is evaluated against ALL parameters independently
-                safe_count = 0
-                role_count = 0
-                catch_all_count = 0
-                disposable_count = 0
-                inbox_full_count = 0
-                spam_trap_count = 0
-                disabled_count = 0
-                invalid_count = 0
-                unknown_count = 0
+                # Calculate detailed category counts for visualization (Status-driven)
+                safe_count = role_count = catch_all_count = disposable_count = 0
+                inbox_full_count = spam_trap_count = disabled_count = invalid_count = unknown_count = 0
                 
+                # Status-driven aggregation (Principal Architect Rule)
                 for r in results:
-                    status = r.get("status", "Unknown")
-                    
-                    # Count each parameter independently using the boolean flags
-                    # These are NOT mutually exclusive - an email can match multiple categories
-                    
-                    # Disposable
-                    if r.get("is_disposable", False):
-                        disposable_count += 1
-                    
-                    # Catch-All
-                    if r.get("is_catch_all", False):
-                        catch_all_count += 1
-                    
-                    # Inbox Full
-                    if r.get("is_inbox_full", False):
-                        inbox_full_count += 1
-                    
-                    # Disabled
-                    if r.get("is_disabled", False):
-                        disabled_count += 1
-                    
-                    # Spam Trap (Blacklisted)
-                    if r.get("is_blacklisted", False):
-                        spam_trap_count += 1
-                    
-                    # Unknown (SMTP inconclusive)
-                    if r.get("is_unknown", False):
-                        unknown_count += 1
-                    
-                    # Valid emails - count as Safe or Role (Reoon-style)
-                    if status in ("safe", "role", "Valid"):
-                        if r.get("is_role_based", False):
-                            role_count += 1
-                        else:
-                            safe_count += 1
-                    # Invalid emails (not counted in specific categories above)
-                    elif status == "invalid":  # Fixed: lowercase to match validator output
-                        # Only count as generic invalid if not already counted in a specific category
-                        # This is for emails that failed for other reasons (syntax, domain, MX, SMTP mailbox not found, etc.)
-                        if not any([
-                            r.get("is_disposable", False),
-                            r.get("is_catch_all", False),
-                            r.get("is_inbox_full", False),
-                            r.get("is_disabled", False),
-                            r.get("is_blacklisted", False),
-                            r.get("is_unknown", False)
-                        ]):
-                            invalid_count += 1
+                    status = r.get("status", "unknown")
+                    if status == "valid": safe_count += 1
+                    elif status == "role": role_count += 1
+                    elif status == "catch_all": catch_all_count += 1
+                    elif status == "disposable": disposable_count += 1
+                    elif status == "inbox_full": inbox_full_count += 1
+                    elif status == "spamtrap": spam_trap_count += 1
+                    elif status == "disabled": disabled_count += 1
+                    elif status == "invalid": invalid_count += 1
+                    else: unknown_count += 1
 
                 
                 
                 validated_filename = f"validated_{batch_id}_{file.filename}"
-                # Save results to a file for download
+                # Save results to a file for download (Architect Format)
                 with open(validated_filename, 'w', newline='') as f:
-                    writer = csv.DictWriter(f, fieldnames=['email', 'syntax_valid', 'domain_exists', 'mx_record_exists', 'role_based', 'disposable', 'smtp_valid', 'blacklist', 'catch_all', 'status', 'verdict'])
+                    writer = csv.DictWriter(f, fieldnames=[
+                        'email', 'status', 'sub_status', 'score', 
+                        'syntax_val', 'domain_exists', 'mx_record', 
+                        'is_disposable', 'is_role', 'is_catch_all', 'verdict'
+                    ])
                     writer.writeheader()
-                    # Include all results in the output file
                     writer.writerows([
                         {
                             "email": r["email"], 
-                            "syntax_valid": r.get("syntax_valid", False),
-                            "domain_exists": r.get("domain_valid", False),
-                            "mx_record_exists": r.get("mx_valid", False),
-                            "role_based": r.get("role_based", "No"),
-                            "disposable": r.get("disposable", "No"),
-                            "smtp_valid": r.get("smtp_status", "not_checked"),
-                            "blacklist": "Yes" if r.get("status") == "Invalid" and r.get("reason") == "Blacklisted domain" else "No",
-                            "catch_all": r.get("catch_all", False),
-                            "status": r["status"],
-                            "verdict": r["status"]
+                            "status": r.get("status"),
+                            "sub_status": r.get("sub_status"),
+                            "score": r.get("score"),
+                            "syntax_val": r.get("checks", {}).get("syntax"),
+                            "domain_exists": r.get("checks", {}).get("domain"),
+                            "mx_record": r.get("checks", {}).get("mx"),
+                            "is_disposable": r.get("is_disposable"),
+                            "is_role": r.get("is_role_account"),
+                            "is_catch_all": r.get("is_catch_all"),
+                            "verdict": r.get("status")
                         } for r in results
                     ])
 
@@ -532,6 +481,7 @@ async def validate_emails(
                     "inbox_full": inbox_full_count,
                     "spam_trap": spam_trap_count,
                     "disabled": disabled_count,
+                    "invalid": invalid_count,
                     "unknown": unknown_count,
                     "validated_download": f"/download/{validated_filename}",
                     "credits_remaining": current_user.credits,
@@ -645,24 +595,23 @@ async def validate_single_email(
         
         resp = {
             "email": results[0]["email"],
-            "is_valid": results[0]["status"] in ("safe", "role", "Valid"),
+            "is_valid": results[0]["status"] in ("valid", "role"),
             "status": results[0]["status"],
             "reason": results[0].get("reason", "N/A"),
-            "syntax_valid": results[0].get("syntax_valid", "Not Valid"),
-            "domain_valid": results[0].get("domain_valid", "Not Valid"),
-            "mx_valid": results[0].get("mx_record_exists", "Not Valid"),
-            "smtp_status": results[0].get("smtp_status", "N/A"),
-            "disposable": results[0].get("disposable", "No"),
-            "role_based": results[0].get("role_based", "No"),
-            "catch_all": results[0].get("catch_all", "No"),
-            "score": results[0].get("deliverability_score", 0),
+            "syntax_valid": results[0].get("checks", {}).get("syntax", False),
+            "mx_valid": results[0].get("checks", {}).get("mx", False),
+            "smtp_status": results[0].get("checks", {}).get("smtp", "N/A"),
+            "disposable": results[0].get("is_disposable", False),
+            "role_based": results[0].get("is_role_account", False),
+            "catch_all": results[0].get("is_catch_all", False),
+            "score": results[0].get("score", 0),
             "grade": results[0].get("quality_grade", "N/A"),
             "time_taken": round(time.time() - start_time, 2),
             "credits_remaining": current_user.credits,
-            # Keys expected by frontend
-            "regex": results[0].get("syntax_valid", "Not Valid"),
-            "mx": results[0].get("mx_record_exists", "Not Valid"),
-            "smtp": results[0].get("smtp_valid", "Not Valid")
+            # Keys expected by frontend components
+            "regex": "Valid" if results[0].get("checks", {}).get("syntax") else "Not Valid",
+            "mx": "Valid" if results[0].get("checks", {}).get("mx") else "Not Valid",
+            "smtp": "Valid" if results[0]["status"] in ("valid", "role") else "Not Valid"
         }
         print(f"DEBUG: Final Response to Frontend: {resp}")
         return resp
@@ -696,8 +645,8 @@ def download_valid_emails(filename: str):
             reader = csv.DictReader(infile)
             fieldnames = reader.fieldnames
             
-            # Filter for valid emails (Reoon-style: safe, role)
-            valid_rows = [row for row in reader if row.get('status') in ('safe', 'role', 'Valid')]
+            # Filter for valid emails (Architect Style: valid, role)
+            valid_rows = [row for row in reader if row.get('status') in ('valid', 'role')]
             
             # Write filtered data to new file
             with open(valid_file_path, 'w', newline='', encoding='utf-8') as outfile:
@@ -725,8 +674,8 @@ def download_invalid_emails(filename: str):
             reader = csv.DictReader(infile)
             fieldnames = reader.fieldnames
             
-            # Filter for invalid emails (not safe/role)
-            invalid_rows = [row for row in reader if row.get('status') not in ('safe', 'role', 'Valid')]
+            # Filter for invalid emails (anything not valid or role)
+            invalid_rows = [row for row in reader if row.get('status') not in ('valid', 'role')]
             
             # Write filtered data to new file
             with open(invalid_file_path, 'w', newline='', encoding='utf-8') as outfile:

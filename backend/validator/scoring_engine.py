@@ -1,147 +1,105 @@
 """
 Scoring Engine
-Weighted scoring system for email validation (ZeroBounce/Reoon style)
+Standardized email validation scoring and status classification (ZeroBounce/Reoon compatible)
 """
 from typing import Dict, Any, Optional, Tuple
 
-# Scoring weights (total possible: 100)
-WEIGHTS = {
-    "syntax_valid": 20,      # RFC 5322 compliant
-    "mx_exists": 20,         # Has mail server
-    "not_disposable": 15,    # Real domain
-    "smtp_250": 30,          # Mailbox confirmed
-    "catch_all": -10,        # Unverifiable
-    "role_account": -5,      # Generic address
-    "blacklisted": -100,     # Auto-fail
-    "free_provider": 10,     # Trusted provider bonus
-    "inbox_full": 10,        # Mailbox exists but full
+# Industry-Standard Final Statuses (ZeroBounce Style)
+STATUS_VALID = "valid"
+STATUS_INVALID = "invalid"
+STATUS_UNKNOWN = "unknown"
+STATUS_CATCH_ALL = "catch_all"
+STATUS_ROLE = "role"
+STATUS_DISPOSABLE = "disposable"
+STATUS_INBOX_FULL = "inbox_full"
+STATUS_SPAMTRAP = "spamtrap"
+STATUS_DISABLED = "disabled"
+
+# Status to Score mapping (Confidence Only)
+STATUS_SCORES = {
+    STATUS_VALID: 100,
+    STATUS_INBOX_FULL: 75,
+    STATUS_CATCH_ALL: 70,
+    STATUS_ROLE: 65,
+    STATUS_UNKNOWN: 50,
+    STATUS_DISPOSABLE: 0,
+    STATUS_INVALID: 0,
+    STATUS_SPAMTRAP: 0,
+    STATUS_DISABLED: 0
 }
 
-def calculate_score(p1: Dict, p2: Dict, p3: Dict, p4: Dict) -> int:
-    """
-    Calculate weighted validation score (0-100)
-    
-    Args:
-        p1: Phase 1 results (syntax, disposable, blacklist, role)
-        p2: Phase 2 results (DNS, MX)
-        p3: Phase 3 results (reputation)
-        p4: Phase 4 results (SMTP)
-    
-    Returns:
-        Score between 0-100
-    """
-    score = 0
-    
-    # Phase 1 scoring
-    if p1:
-        if p1.get("syntax_valid"):
-            score += WEIGHTS["syntax_valid"]
-        if not p1.get("is_disposable"):
-            score += WEIGHTS["not_disposable"]
-        if p1.get("is_blacklisted"):
-            score += WEIGHTS["blacklisted"]  # -100
-        if p1.get("is_role"):
-            score += WEIGHTS["role_account"]  # -5
-    
-    # Phase 2 scoring
-    if p2:
-        if p2.get("mx_exists"):
-            score += WEIGHTS["mx_exists"]
-    
-    # Phase 3 scoring
-    if p3:
-        if p3.get("is_free_provider"):
-            score += WEIGHTS["free_provider"]
-    
-    # Phase 4 scoring
-    if p4:
-        smtp_code = p4.get("smtp_code", 0)
-        if smtp_code == 250:
-            score += WEIGHTS["smtp_250"]
-        elif smtp_code in [452, 552]:  # Inbox full
-            score += WEIGHTS["inbox_full"]
-        
-        if p4.get("is_catch_all"):
-            score += WEIGHTS["catch_all"]  # -10
-    
-    # Clamp to 0-100
-    return max(0, min(100, score))
-
-def classify_status(
-    score: int,
-    p1: Optional[Dict],
-    p2: Optional[Dict],
-    p3: Optional[Dict],
-    p4: Optional[Dict]
+def classify_status_reoon(
+    p1: Dict,
+    p2: Dict,
+    p3: Dict,
+    p4: Dict
 ) -> Tuple[str, str, str]:
     """
-    Classify email status based on 30 Dec logic.
-    Returns: (status, reason, sub_status)
-    
-    Statuses (UPPERCASE per 30 Dec):
-        - VALID
-        - RISKY
-        - INVALID
-        - NEUTRAL
+    Principal Architect Implementation: Classification Hierarchy
+    Rules:
+    1. Syntax is Absolute (FAIL FAST)
+    2. Domain/MX existence (REQUIRED)
+    3. Disposable/Spamtrap/Blacklist (INVALID/DISPOSABLE)
+    4. Provider Overrides (Gmail/Outlook/Yahoo -> UNKNOWN if not confirmed)
+    5. SMTP results (VALID/INVALID/INBOX_FULL)
+    6. Catch-all detection
     """
-    # 1. HARD INVALID (immediate disqualification)
-    if p1:
-        if not p1.get("syntax_valid"):
-            reason = p1["failures"][0] if p1.get("failures") else "Invalid syntax"
-            return ("INVALID", reason, "invalid_syntax")
-        if p1.get("is_disposable"):
-            return ("INVALID", "Disposable email address", "disposable")
-        if p1.get("is_blacklisted"):
-            return ("INVALID", "Blacklisted domain", "blacklisted")
     
-    if p2:
-        if not p2.get("mx_exists"):
-            return ("INVALID", "No mail server found", "no_mx")
-            
-    # 2. SMTP FAILURES
-    if p4:
-        smtp_status = p4.get("smtp_status", "not_checked")
-        smtp_code = p4.get("smtp_code", 0)
+    # --- PHASE 1: SYNTAX (ABSOLUTE) ---
+    if not p1 or not p1.get("syntax_valid"):
+        reason = p1.get("failures", ["syntax_error"])[0] if p1 else "syntax_error"
+        return (STATUS_INVALID, reason, "syntax_error")
         
-        if smtp_code in [550, 551, 553]:
-            return ("INVALID", "Mailbox does not exist", "mailbox_not_found")
-            
-        # NEVER VALID - always RISKY
-        if p4.get("is_catch_all"):
-            return ("RISKY", "Catch-all domain (unverifiable)", "catch_all")
-            
-        if smtp_status == "mailbox_full":
-            return ("RISKY", "Mailbox full or quota exceeded", "mailbox_full")
-            
-        # Role account detection (after catch-all/full)
-        if p1 and p1.get("is_role"):
-            return ("RISKY", "Role-based address", "role_account")
-            
-        # UNCERTAIN - NEUTRAL
-        if smtp_status == "timeout":
-            return ("NEUTRAL", "SMTP timeout – server did not respond", "timeout")
-            
-        if smtp_status == "temporary":
-            return ("NEUTRAL", "Temporary failure", "temporary_failure")
-            
-        if smtp_status == "error":
-            return ("NEUTRAL", "SMTP connection failed", "connection_error")
-            
-        # 3. DELIVERABLE (VALID)
+    # --- PHASE 2: DOMAIN & MX ---
+    if not p2 or not p2.get("mx_exists"):
+        return (STATUS_INVALID, "dns_error", "no_mx")
+        
+    # --- PHASE 3: DISPOSABLE / SPAMTRAP / BLACKLIST ---
+    if p1.get("is_disposable"):
+        return (STATUS_DISPOSABLE, "disposable", "disposable")
+        
+    if p1.get("is_blacklisted"):
+        return (STATUS_INVALID, "blacklisted", "blacklisted")
+        
+    # --- PHASE 4: PROVIDER OVERRIDES (GMail, Outlook, etc.) ---
+    is_free = p3.get("is_free_provider") if p3 else False
+    
+    # SMTP result check
+    smtp_code = p4.get("smtp_code", 0) if p4 else 0
+    smtp_status = p4.get("smtp_status", "not_checked") if p4 else "not_checked"
+    
+    # If it's a free provider, we skipped SMTP (unless the rules change)
+    if is_free and smtp_status == "skipped_free_provider":
+        # Free providers are UNKNOWN by default unless confirmed by SMTP (which we skip)
+        # Principal Rule 3: Free providers are UNKNOWN unless confirmed (but we skip SMTP)
+        # So they stay UNKNOWN
+        return (STATUS_UNKNOWN, "free_provider_unconfirmed", "unknown")
+
+    # --- PHASE 5: SMTP RESULTS ---
+    if p4:
         if smtp_code == 250:
-            return ("VALID", "Deliverable", "mailbox_exists")
+            # Special check for Catch-all (Phase 6)
+            if p4.get("is_catch_all"):
+                return (STATUS_CATCH_ALL, "catch_all", "catch_all")
+                
+            # Role accounts check (as requested moving to status ROLE)
+            if p1.get("is_role"):
+                return (STATUS_ROLE, "role_based", "role")
+                
+            return (STATUS_VALID, "deliverable", "mailbox_exists")
             
-    # 4. FREE PROVIDERS (Trusted)
-    if p3 and p3.get("is_free_provider"):
-        if p2 and p2.get("mx_exists"):
-            if p1 and p1.get("is_role"):
-                return ("RISKY", "Role-based address", "role_account")
-            return ("VALID", "Deliverable (trusted provider)", "free_provider")
+        if smtp_code in [452, 552] or smtp_status == "mailbox_full":
+            return (STATUS_INBOX_FULL, "mailbox_full", "mailbox_full")
             
+        if smtp_code in [550, 551, 553]:
+            return (STATUS_INVALID, "mailbox_not_found", "mailbox_not_found")
+            
+        if smtp_status in ["timeout", "temporary", "error"]:
+            return (STATUS_UNKNOWN, "smtp_unverifiable", "unknown")
+
     # Default fallback
-    if score >= 80:
-        return ("VALID", "High probability valid", "high_quality")
-    elif score >= 60:
-        return ("RISKY", "Passes basic checks but unverifiable", "unverifiable")
-    else:
-        return ("INVALID", "Validation failed", "unverifiable")
+    return (STATUS_UNKNOWN, "unverifiable", "unknown")
+
+def calculate_score_reoon(status: str) -> int:
+    """Score derived from status, not vice-versa"""
+    return STATUS_SCORES.get(status, 0)

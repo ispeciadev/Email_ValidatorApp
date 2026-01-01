@@ -1,513 +1,261 @@
-"""
-Production-Grade Async Email Validation Engine
-Validates 2,200 emails in <30 seconds with ZeroBounce/Reoon-level accuracy
+# Provider behavior table (Principal Architect Constraints)
+PROVIDER_RULES = {
+    "google": {
+        "smtp_check": False,
+        "catch_all": False,
+        "default_status": "unknown"
+    },
+    "microsoft": {
+        "smtp_check": False,
+        "catch_all": False,
+        "default_status": "unknown"
+    },
+    "yahoo": {
+        "smtp_check": False,
+        "catch_all": False,
+        "default_status": "unknown"
+    },
+    "custom": {
+        "smtp_check": True,
+        "catch_all": True
+    }
+}
 
-Key Features:
-- Domain-grouped SMTP connections (2-4 per domain, reused)
-- Aggressive caching (DNS, catch-all)
-- Multi-phase pipeline with fail-fast
-- Scoring system (0-100)
-- Industry-standard output format
-"""
-import asyncio
-import time
-import re
-from typing import Dict, Any, List, Tuple, Optional
-from collections import defaultdict
-from pathlib import Path
+# Mapping provider strings to rule keys
+PROVIDER_MAPPING = {
+    "gmail.com": "google", "googlemail.com": "google", "google.com": "google",
+    "outlook.com": "microsoft", "hotmail.com": "microsoft", "live.com": "microsoft", "msn.com": "microsoft",
+    "yahoo.com": "yahoo", "yahoo.co.uk": "yahoo", "yahoo.co.in": "yahoo", "ymail.com": "yahoo"
+}
 
-# Import async libraries
-import aiodns
-try:
-    import uvloop
-    asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
-except (ImportError, NotImplementedError):
-    # uvloop not available on Windows
-    pass
-
-from email_validator import validate_email as validate_email_syntax, EmailNotValidError
-
-# Import our custom modules
-from .smtp_pool import SMTPConnectionPool
-from .dns_cache import DNSCache
-from .scoring_engine import calculate_score, classify_status
-
-# ======================= CONFIGURATION =======================
-
-# Timeouts (strict)
-TCP_CONNECT_TIMEOUT = 2.0  # seconds
-SMTP_RESPONSE_TIMEOUT = 2.0  # seconds
-TOTAL_EMAIL_TIMEOUT = 4.0  # seconds
-
-# Concurrency limits
-MAX_ASYNC_WORKERS = 250
-MAX_SMTP_SOCKETS = 80
-MAX_CONNECTIONS_PER_DOMAIN = 3
-
-# Performance targets
-TARGET_EMAILS_PER_SEC = 73  # 2200 emails / 30 seconds
-
-# ======================= LOAD DOMAIN LISTS =======================
-
-def load_domain_set(filename: str) -> set:
-    """Load domain list from file into set for O(1) lookup"""
-    filepath = Path(__file__).parent / filename
-    domains = set()
-    try:
-        if filepath.exists():
-            with open(filepath, 'r', encoding='utf-8') as f:
-                for line in f:
-                    line = line.strip().lower()
-                    if line and not line.startswith('#'):
-                        domains.add(line)
-        print(f"[INIT] Loaded {len(domains)} domains from {filename}")
-    except Exception as e:
-        print(f"[WARNING] Could not load {filename}: {e}")
-    return frozenset(domains)  # Immutable for thread safety
-
-# Load domain lists
-DISPOSABLE_DOMAINS = load_domain_set('disposable_domains.txt')
-BLACKLIST_DOMAINS = load_domain_set('blacklist_domains.txt')
-
-# Role-based accounts
-ROLE_ACCOUNTS = frozenset({
-    'admin', 'administrator', 'root', 'sysadmin', 'webmaster', 'hostmaster', 'postmaster',
-    'support', 'help', 'helpdesk', 'service', 'customer', 'customerservice',
-    'sales', 'marketing', 'info', 'contact', 'enquiry', 'inquiry', 'team',
-    'billing', 'accounts', 'accounting', 'finance', 'payment', 'invoice',
-    'office', 'reception', 'legal', 'compliance', 'privacy', 'security',
-    'noreply', 'no-reply', 'donotreply', 'do-not-reply', 'mailer-daemon',
-    'abuse', 'feedback', 'press', 'media', 'news', 'pr',
-    'hr', 'jobs', 'careers', 'recruitment', 'hiring',
-    'dev', 'developer', 'it', 'tech', 'technical',
-    'orders', 'order', 'shop', 'store', 'returns', 'refunds'
-})
-
-# Free email providers (trusted, skip SMTP)
-FREE_PROVIDERS = frozenset({
-    'gmail.com', 'googlemail.com', 'google.com',
-    'outlook.com', 'hotmail.com', 'live.com', 'msn.com',
-    'yahoo.com', 'yahoo.co.uk', 'yahoo.co.in', 'ymail.com',
-    'icloud.com', 'me.com', 'mac.com',
-    'aol.com', 'aim.com',
-    'protonmail.com', 'proton.me', 'pm.me',
-    'zoho.com', 'zohomail.com',
-    'fastmail.com', 'tutanota.com', 'gmx.com', 'mail.com',
-    'yandex.com', 'mail.ru', 'rediffmail.com'
-})
-
-# Global instances
-dns_cache = DNSCache()
-smtp_pools: Dict[str, SMTPConnectionPool] = {}
-
-# Semaphores for concurrency control
-smtp_semaphore = asyncio.Semaphore(MAX_SMTP_SOCKETS)
-worker_semaphore = asyncio.Semaphore(MAX_ASYNC_WORKERS)
-
-# ======================= PHASE 1: SYNTAX & LOCAL RULES =======================
+# ======================= PHASE 1: SYNTAX (ABSOLUTE) =======================
 
 def phase_1_syntax(email: str) -> Dict[str, Any]:
     """
-    Phase 1: Instant syntax validation (< 0.1ms)
-    FAIL FAST on any syntax error
+    Phase 1: RFC Syntax (FAIL FAST)
+    Rejected if: spaces, double dots, missing parts, multi-@, invalid TLD
     """
     result = {
-        "phase": 1,
-        "email": email,
         "syntax_valid": False,
+        "email": email,
+        "status": "invalid",
+        "reason": "syntax_error",
         "is_disposable": False,
         "is_blacklisted": False,
         "is_role": False,
-        "score": 0,
         "failures": []
     }
     
-    # Basic format check
-    if not email or email.count('@') != 1:
-        result["failures"].append("invalid_format")
+    if not email: return result
+
+    # 1. Basic Structure
+    if ' ' in email:
+        result["failures"].append("spaces_detected")
         return result
-    
+        
+    if email.count('@') != 1:
+        result["failures"].append("multi_at_symbol")
+        return result
+        
     local_part, domain = email.split('@')
-    
-    # Check for double dots (RFC violation)
-    if '..' in email:
-        result["failures"].append("double_dot")
+
+    # 2. Local Part Checks
+    if not local_part:
+        result["failures"].append("empty_local_part")
         return result
-    
-    # Leading/trailing dots
-    if local_part.startswith('.') or local_part.endswith('.'):
-        result["failures"].append("local_dot")
+        
+    if '..' in local_part or local_part.startswith('.') or local_part.endswith('.'):
+        result["failures"].append("local_part_dot_error")
         return result
-    
-    if domain.startswith('.') or domain.endswith('.'):
-        result["failures"].append("domain_dot")
+
+    # 3. Domain Checks
+    if not domain or '.' not in domain:
+        result["failures"].append("invalid_domain_structure")
         return result
-    
-    # Use email-validator library (strict RFC 5322)
+        
+    if '..' in domain or domain.startswith('.') or domain.endswith('.'):
+        result["failures"].append("domain_dot_error")
+        return result
+        
+    tld = domain.split('.')[-1]
+    if len(tld) < 2 or len(tld) > 63:
+        result["failures"].append("invalid_tld_length")
+        return result
+
+    # 4. Strict email-validator check
     try:
-        validated = validate_email_syntax(email, check_deliverability=False)
-        result["normalized"] = validated.normalized
+        # Use allow_smtputf8=False for maximum compatibility
+        validate_email_syntax(email, check_deliverability=False, allow_smtputf8=False)
         result["syntax_valid"] = True
-        result["score"] += 20  # +20 for valid syntax
+        result.pop("status") # Will be computed later
+        result.pop("reason")
     except EmailNotValidError as e:
-        result["failures"].append(f"syntax: {str(e)}")
+        result["failures"].append(f"rfc_violation: {str(e)}")
         return result
+
+    # --- BELOW ONLY IF SYNTAX VALID ---
+    domain_lower = domain.lower()
     
-    # Normalize domain
-    domain = domain.lower()
-    
-    # Disposable check (O(1))
-    if domain in DISPOSABLE_DOMAINS:
+    # Disposable Domain Check (O(1))
+    if domain_lower in DISPOSABLE_DOMAINS:
         result["is_disposable"] = True
-        result["failures"].append("disposable")
-        result["score"] = 0  # Auto-fail
-        return result
-    
-    # Blacklist check (O(1))
-    if domain in BLACKLIST_DOMAINS:
+        
+    # Blacklist Check (O(1))
+    if domain_lower in BLACKLIST_DOMAINS:
         result["is_blacklisted"] = True
-        result["failures"].append("blacklisted")
-        result["score"] = -100  # Auto-fail
-        return result
-    
-    # Not disposable bonus
-    result["score"] += 15  # +15 for not disposable
-    
-    # Role account detection (informational, not a failure)
+        
+    # Role-based check
     local_normalized = local_part.lower().replace('.', '').replace('-', '')
     if local_normalized in ROLE_ACCOUNTS:
         result["is_role"] = True
-        result["score"] -= 5  # -5 for role account
-    
-    # Store domain for next phase
-    result["domain"] = domain
-    result["local_part"] = local_part
-    
+        
     return result
 
-# ======================= PHASE 2: DOMAIN INTELLIGENCE =======================
+# ======================= PHASE 2: DOMAIN & MX =======================
 
 async def phase_2_dns(domain: str) -> Dict[str, Any]:
-    """
-    Phase 2: Async DNS resolution with caching (2-4s for all domains)
-    """
-    result = {
-        "phase": 2,
-        "domain": domain,
-        "mx_exists": False,
-        "mx_hosts": [],
-        "provider": "unknown",
-        "score": 0
-    }
+    """Phase 2: DNS & MX (Async/Cached)"""
+    result = {"mx_exists": False, "mx_hosts": [], "provider": "custom"}
     
-    # Get MX records from cache or resolve
     mx_data = await dns_cache.get_mx_records(domain)
-    
-    if not mx_data or not mx_data.get("mx_hosts"):
-        result["failures"] = ["no_mx"]
-        return result
-    
-    result["mx_exists"] = True
-    result["mx_hosts"] = mx_data["mx_hosts"]
-    result["provider"] = mx_data["provider"]
-    result["score"] += 20  # +20 for MX exists
-    
+    if mx_data and mx_data.get("mx_hosts"):
+        result["mx_exists"] = True
+        result["mx_hosts"] = mx_data["mx_hosts"]
+        result["provider_name"] = mx_data["provider"]
     return result
 
-# ======================= PHASE 3: REPUTATION =======================
+# ======================= PHASE 4: PROVIDER OVERRIDE =======================
 
-def phase_3_reputation(domain: str) -> Dict[str, Any]:
-    """
-    Phase 3: Reputation checks (no SMTP, instant)
-    """
-    result = {
-        "phase": 3,
-        "is_free_provider": domain in FREE_PROVIDERS,
-        "score": 0
-    }
-    
-    # Free provider bonus (trusted)
-    if result["is_free_provider"]:
-        result["score"] += 10  # Bonus for known providers
-    
-    return result
+def get_provider_rules(domain: str, provider_name: str) -> Dict[str, Any]:
+    """Combine domain and provider intelligence to determine behavior"""
+    rule_key = PROVIDER_MAPPING.get(domain.lower())
+    if not rule_key:
+        # Fallback to provider fingerprinting from MX
+        if "google" in provider_name.lower(): rule_key = "google"
+        elif "microsoft" in provider_name.lower(): rule_key = "microsoft"
+        elif "yahoo" in provider_name.lower(): rule_key = "yahoo"
+        else: rule_key = "custom"
+        
+    return PROVIDER_RULES.get(rule_key, PROVIDER_RULES["custom"])
 
-# ======================= PHASE 4: SMTP VERIFICATION =======================
-
-async def phase_4_smtp(email: str, domain: str, mx_hosts: List[str], is_free_provider: bool) -> Dict[str, Any]:
-    """
-    Phase 4: SMTP verification with connection pooling
-    ONLY for high-confidence emails, NOT free providers
-    """
-    result = {
-        "phase": 4,
-        "smtp_checked": False,
-        "smtp_code": 0,
-        "smtp_status": "not_checked",
-        "deliverable": None,
-        "is_catch_all": False,
-        "score": 0
-    }
-    
-    # Skip SMTP for free providers (they block it)
-    if is_free_provider:
-        result["smtp_status"] = "skipped_free_provider"
-        result["deliverable"] = True  # Trust free providers
-        result["score"] += 20  # Bonus for deliverable
-        return result
-    
-    # Get or create SMTP pool for this domain
-    if domain not in smtp_pools:
-        smtp_pools[domain] = SMTPConnectionPool(
-            domain=domain,
-            mx_hosts=mx_hosts,
-            max_size=MAX_CONNECTIONS_PER_DOMAIN
-        )
-    
-    pool = smtp_pools[domain]
-    
-    # Verify with SMTP (with semaphore for global limit)
-    async with smtp_semaphore:
-        try:
-            smtp_result = await asyncio.wait_for(
-                pool.verify_email(email),
-                timeout=TOTAL_EMAIL_TIMEOUT
-            )
-            
-            result["smtp_checked"] = True
-            result["smtp_code"] = smtp_result.get("code", 0)
-            result["smtp_status"] = smtp_result.get("status", "unknown")
-            
-            # Interpret SMTP code
-            code = result["smtp_code"]
-            if code == 250:
-                result["deliverable"] = True
-                result["score"] += 30  # +30 for SMTP 250
-            elif code in [452, 552]:  # Inbox full / quota
-                result["deliverable"] = False
-                result["smtp_status"] = "mailbox_full"
-                result["score"] += 10  # Partial credit (mailbox exists)
-            elif code in [450, 451, 421]:  # Temporary / greylisted
-                result["deliverable"] = None  # UNKNOWN
-                result["smtp_status"] = "temporary"
-                result["score"] += 0  # No penalty for temp
-            elif code in [550, 551, 553]:  # Not found
-                result["deliverable"] = False
-                result["smtp_status"] = "mailbox_not_found"
-                result["score"] -= 20  # Penalty for not found
-            
-            # Catch-all detection (if deliverable)
-            if result["deliverable"]:
-                is_catchall = await dns_cache.is_catch_all_domain(domain, pool)
-                if is_catchall:
-                    result["is_catch_all"] = True
-                    result["score"] -= 10  # -10 for catch-all
-                    
-        except asyncio.TimeoutError:
-            result["smtp_status"] = "timeout"
-            result["deliverable"] = None  # UNKNOWN
-        except Exception as e:
-            result["smtp_status"] = "error"
-            result["smtp_error"] = str(e)
-            result["deliverable"] = None
-    
-    return result
-
-# ======================= MAIN VALIDATION FUNCTIONS =======================
+# ======================= MAIN PIPELINE =======================
 
 async def validate_email_async(email: str) -> Dict[str, Any]:
-    """
-    Validate single email through all phases
-    Returns industry-standard output format
-    """
+    """Principal Architect Production-Grade Pipeline"""
     start_time = time.time()
+    email = email.strip() # Keep original casing for output, but internal compare is lower
     
-    # Normalize
-    email = email.strip().lower()
-    
-    # Phase 1: Syntax & local rules (instant)
+    # 1. PHASE 1: SYNTAX (ABSOLUTE)
     p1 = phase_1_syntax(email)
-    if p1["failures"] or not p1["syntax_valid"]:
-        # Early exit
-        execution_ms = (time.time() - start_time) * 1000
-        return format_output(email, p1, None, None, None, execution_ms)
+    if not p1["syntax_valid"]:
+        return format_output_architect(email, p1, None, None, None, (time.time()-start_time)*1000)
+
+    domain = email.split('@')[1].lower()
     
-    domain = p1["domain"]
-    
-    # Phase 2: DNS (async, cached)
+    # 2. PHASE 2: DOMAIN & MX
     p2 = await phase_2_dns(domain)
     if not p2["mx_exists"]:
-        # Early exit
-        execution_ms = (time.time() - start_time) * 1000
-        return format_output(email, p1, p2, None, None, execution_ms)
-    
-    # Phase 3: Reputation (instant)
-    p3 = phase_3_reputation(domain)
-    
-    # Phase 4: SMTP (selective, async)
-    p4 = await phase_4_smtp(
-        email,
-        domain,
-        p2["mx_hosts"],
-        p3["is_free_provider"]
-    )
-    
-    execution_ms = (time.time() - start_time) * 1000
-    
-    return format_output(email, p1, p2, p3, p4, execution_ms)
-
-async def validate_bulk_async(emails: List[str], batch_id: str = None) -> List[Dict[str, Any]]:
-    """
-    Validate emails in bulk with domain grouping and concurrency
-    Target: 2,200 emails in <30 seconds
-    """
-    print(f"\n{'='*70}")
-    print(f"BULK VALIDATION: {len(emails)} emails")
-    print(f"Target: <30 seconds ({TARGET_EMAILS_PER_SEC} emails/sec)")
-    print(f"{'='*70}")
-    
-    start_time = time.time()
-    
-    # Deduplicate and normalize
-    unique_emails = list(set([e.strip().lower() for e in emails if e.strip()]))
-    print(f"Processing {len(unique_emails)} unique emails")
-    
-    # Group by domain for efficiency
-    domain_groups = defaultdict(list)
-    for email in unique_emails:
-        if '@' in email:
-            domain = email.split('@')[1]
-            domain_groups[domain].append(email)
-        else:
-            domain_groups["_invalid"].append(email)
-    
-    print(f"Grouped into {len(domain_groups)} domains")
-    
-    # Pre-warm DNS cache (all domains at once)
-    print("Pre-warming DNS cache...")
-    dns_tasks = [dns_cache.get_mx_records(domain) 
-                 for domain in domain_groups.keys() if domain != "_invalid"]
-    await asyncio.gather(*dns_tasks, return_exceptions=True)
-    
-    # Validate all emails concurrently (with worker limit)
-    print("Validating emails concurrently...")
-    async def validate_with_semaphore(email):
-        async with worker_semaphore:
-            return await validate_email_async(email)
-    
-    tasks = [validate_with_semaphore(email) for email in unique_emails]
-    results = await asyncio.gather(*tasks, return_exceptions=True)
-    
-    # Handle exceptions
-    final_results = []
-    for i, result in enumerate(results):
-        if isinstance(result, Exception):
-            final_results.append({
-                "email": unique_emails[i],
-                "status": "invalid",
-                "sub_status": "validation_error",
-                "error": str(result)
-            })
-        else:
-            if batch_id:
-                result["batch_id"] = batch_id
-            final_results.append(result)
-    
-    # Stats
-    elapsed = time.time() - start_time
-    emails_per_sec = len(unique_emails) / elapsed
-    
-    # Count statuses
-    status_counts = defaultdict(int)
-    for r in final_results:
-        status_counts[r.get("status", "unknown")] += 1
-    
-    print(f"\n{'='*70}")
-    print(f"BULK VALIDATION COMPLETE")
-    print(f"Total time: {elapsed:.2f}s")
-    print(f"Speed: {emails_per_sec:.1f} emails/sec")
-    print(f"Status breakdown:")
-    for status, count in sorted(status_counts.items()):
-        pct = (count / len(final_results)) * 100
-        print(f"  {status.upper()}: {count} ({pct:.1f}%)")
-    print(f"{'='*70}\n")
-    
-    return final_results
-
-# ======================= OUTPUT FORMATTING =======================
-
-def format_output(
-    email: str,
-    p1: Optional[Dict],
-    p2: Optional[Dict],
-    p3: Optional[Dict],
-    p4: Optional[Dict],
-    execution_ms: float
-) -> Dict[str, Any]:
-    """
-    Format validation result in 30 Dec compliant format (with legacy fields)
-    """
-    # Calculate total score
-    total_score = 0
-    if p1: total_score += p1.get("score", 0)
-    if p2: total_score += p2.get("score", 0)
-    if p3: total_score += p3.get("score", 0)
-    if p4: total_score += p4.get("score", 0)
-    
-    # Clamp 0-100
-    final_score = max(0, min(100, total_score))
-    
-    # Classify status (30 Dec logic)
-    status, reason, sub_status = classify_status(final_score, p1, p2, p3, p4)
-    
-    # Map status to legacy fields
-    is_valid = (status == "VALID")
-    
-    # Build complete output combining new and legacy fields
-    output = {
-        "email": email,
-        "status": status,          # VALID, INVALID, RISKY, NEUTRAL
-        "reason": reason,
-        "sub_status": sub_status,
-        "score": final_score,
+        return format_output_architect(email, p1, p2, None, None, (time.time()-start_time)*1000)
         
-        # New Engine Fields
-        "syntax_valid": p1.get("syntax_valid", False) if p1 else False,
-        "mx_exists": p2.get("mx_exists", False) if p2 else False,
-        "mx_provider": p2.get("provider", "unknown") if p2 else "unknown",
-        "is_disposable": p1.get("is_disposable", False) if p1 else False,
-        "is_role_based": p1.get("is_role", False) if p1 else False,
-        "is_blacklisted": p1.get("is_blacklisted", False) if p1 else False,
-        "is_catch_all": p4.get("is_catch_all", False) if p4 else False,
-        "is_free_email": p3.get("is_free_provider", False) if p3 else False,
-        "has_inbox_full": (sub_status == "mailbox_full"),
-        "smtp_code": p4.get("smtp_code", 0) if p4 else 0,
-        "smtp_status": p4.get("smtp_status", "not_checked") if p4 else "not_checked",
-        "smtp_timeout": (sub_status == "timeout"),
-        
-        # Legacy Status Fields (30 Dec requirement)
-        "is_valid": is_valid,
-        "is_deliverable": is_valid,
-        "is_safe_to_send": (status == "VALID"),
-        "deliverability_score": final_score,
-        "verdict": status,
-        "execution_ms": round(execution_ms, 2),
-        
-        # UI Component Fields (30 Dec backend compatibility)
-        "regex": "Valid" if p1 and p1.get("syntax_valid") else "Not Valid",
-        "mx": "Valid" if p2 and p2.get("mx_exists") else "Not Valid",
-        "smtp": "Valid" if is_valid else "Not Valid",
-        "role_based": "Yes" if p1 and p1.get("is_role") else "No",
-        "disposable": "Yes" if p1 and p1.get("is_disposable") else "No",
-        "blacklist": "Yes" if p1 and p1.get("is_blacklisted") else "No",
-        "catch_all": "Yes" if p4 and p4.get("is_catch_all") else "No"
+    # 3. PHASE 3: DISPOSABLE / ROLE / BLACKLIST (Already checked in P1 results object)
+    p3 = {"is_free_provider": domain in FREE_PROVIDERS}
+    
+    # 4. PHASE 4: PROVIDER OVERRIDES
+    rules = get_provider_rules(domain, p2.get("provider_name", "unknown"))
+    
+    p4 = {
+        "smtp_status": "not_checked",
+        "smtp_code": 0,
+        "is_catch_all": False
     }
     
-    # Calculate Quality Grade
-    if final_score >= 90: output["quality_grade"] = "A"
-    elif final_score >= 80: output["quality_grade"] = "B"
-    elif final_score >= 60: output["quality_grade"] = "C"
-    elif final_score >= 40: output["quality_grade"] = "D"
-    else: output["quality_grade"] = "F"
+    # 5. PHASE 5 & 6: SMTP & CATCH-ALL (Selective)
+    if rules["smtp_check"]:
+        async with smtp_semaphore:
+            if domain not in smtp_pools:
+                smtp_pools[domain] = SMTPConnectionPool(domain, p2["mx_hosts"], MAX_CONNECTIONS_PER_DOMAIN)
+            
+            pool = smtp_pools[domain]
+            try:
+                smtp_res = await asyncio.wait_for(pool.verify_email(email), timeout=TOTAL_EMAIL_TIMEOUT)
+                p4["smtp_code"] = smtp_res.get("code", 0)
+                p4["smtp_status"] = smtp_res.get("status", "unknown")
+                
+                # Phase 6: Catch-all detection
+                if p4["smtp_code"] == 250 and rules["catch_all"]:
+                    p4["is_catch_all"] = await dns_cache.is_catch_all_domain(domain, pool)
+            except Exception as e:
+                p4["smtp_status"] = "error"
+    else:
+        p4["smtp_status"] = "skipped_free_provider"
+
+    exec_ms = (time.time() - start_time) * 1000
+    return format_output_architect(email, p1, p2, p3, p4, exec_ms)
+
+# ======================= FINAL RESPONSE OBJECT (EXACT FORMAT) =======================
+
+def format_output_architect(email, p1, p2, p3, p4, ms) -> Dict[str, Any]:
+    """ZeroBounce-style output format with status-driven scoring"""
+    from .scoring_engine import classify_status_reoon, calculate_score_reoon
     
-    return output
+    status, reason, sub_status = classify_status_reoon(p1, p2, p3, p4)
+    score = calculate_score_reoon(status)
+    
+    # Required Format
+    res = {
+        "email": email,
+        "status": status,      # valid, invalid, unknown, etc.
+        "sub_status": reason,  # reason maps to sub_status in ZeroBounce
+        "score": score,
+        "checks": {
+            "syntax": p1["syntax_valid"] if p1 else False,
+            "domain": p2["mx_exists"] if p2 else False,
+            "mx": p2["mx_exists"] if p2 else False,
+            "smtp": p4["smtp_status"] if p4 else "not_checked",
+            "catch_all": p4["is_catch_all"] if p4 else False
+        },
+        "safe_to_send": (status in ["valid", "role", "catch_all"]), # Adjusted safety logic
+        "execution_ms": round(ms, 2)
+    }
+    
+    # Legacy & UI Mapping for frontend compatibility
+    res.update({
+        "is_valid": status == "valid",
+        "deliverability_score": score,
+        "verdict": status.upper(),
+        "is_disposable": p1.get("is_disposable") if p1 else False,
+        "is_role_account": p1.get("is_role") if p1 else False,
+        "is_free_email": p3.get("is_free_provider") if p3 else False,
+        "regex": "Valid" if p1 and p1["syntax_valid"] else "Not Valid",
+        "mx_record_exists": "Valid" if p2 and p2["mx_exists"] else "Not Valid",
+        "smtp_valid": "Valid" if status == "valid" else "Not Valid",
+        "reason": reason,
+        "disposable": "Yes" if p1.get("is_disposable") else "No",
+        "role_based": "Yes" if p1.get("is_role") else "No",
+        "catch_all": "Yes" if p4 and p4.get("is_catch_all") else "No"
+    })
+    
+    return res
+
+async def validate_bulk_async(emails: List[str], batch_id: str = None) -> List[Dict[str, Any]]:
+    """Bulk validation using the architect-level pipeline"""
+    start_time = time.time()
+    unique_emails = list(set([e.strip() for e in emails if e.strip()]))
+    
+    # Concurrency control
+    async def task_wrapper(email):
+        async with worker_semaphore:
+            return await validate_email_async(email)
+            
+    tasks = [task_wrapper(email) for email in unique_emails]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    
+    final = []
+    for i, res in enumerate(results):
+        if isinstance(res, Exception):
+            final.append({"email": unique_emails[i], "status": "unknown", "sub_status": "error"})
+        else:
+            if batch_id: res["batch_id"] = batch_id
+            final.append(res)
+            
+    return final
