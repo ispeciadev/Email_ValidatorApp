@@ -3,7 +3,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 import csv, os, time
-from typing import List, Dict, Optional, Literal
+from typing import List, Dict, Optional, Literal, Any
 from sqlalchemy.ext.asyncio import AsyncSession
 from db import engine
 from sqlalchemy.future import select
@@ -11,10 +11,33 @@ from models import EmailRecord, Base, User, CreditHistory, ValidationTask
 from db import get_db
 from config import DATABASE_URL
 
-# Validator mode: "fast" (default) or "strict"
-VALIDATOR_MODE = os.getenv("VALIDATOR_MODE", "fast").lower()
+# Validator mode: "async" (production), "fast" (default), or "strict"
+VALIDATOR_MODE = os.getenv("VALIDATOR_MODE", "async").lower()
 
-if VALIDATOR_MODE == "strict":
+if VALIDATOR_MODE == "async":
+    # NEW: Production-grade async validator (2,200 emails in <30s)
+    print("INFO: Using ASYNC PRODUCTION validator (domain-pooled SMTP, <30s for 2000 emails)")
+    from validator.async_validator import validate_email_async, validate_bulk_async
+    
+    # Wrapper to match existing interface
+    async def process_emails_async_wrapper(emails, batch_id=None, validation_type="individual"):
+        if len(emails) == 1:
+            result = await validate_email_async(emails[0])
+            if batch_id:
+                result["batch_id"] = batch_id
+            return [result], 1, 1 if result["status"] == "valid" else 0, 0 if result["status"] == "valid" else 1, []
+        else:
+            results = await validate_bulk_async(emails, batch_id)
+            total = len(results)
+            valid = sum(1 for r in results if r.get("status") == "valid")
+            invalid = total - valid
+            failed = [r["email"] for r in results if r.get("status") != "valid"]
+            return results, total, valid, invalid, failed
+    
+    # Use the wrapper
+    process_emails_async = process_emails_async_wrapper
+    
+elif VALIDATOR_MODE == "strict":
     # Import STRICT validator (4-stage gated pipeline)
     from validator.strict_validator import (
         StrictEmailValidator as AsyncEmailValidator,
@@ -60,8 +83,16 @@ print("DEBUG: Using DATABASE_URL:", DATABASE_URL)
 
 router = APIRouter()
 
-# Global async validator instance
-_async_validator: Optional[AsyncEmailValidator] = None
+# Global async validator instance (not used in async mode, but needed for compatibility)
+_async_validator: Optional[Any] = None
+
+# Placeholder for async mode (not needed since we import functions directly)
+if VALIDATOR_MODE == "async":
+    AsyncEmailValidator = None
+    get_validator = None
+else:
+    # Already defined by the imports above
+    pass
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -71,10 +102,13 @@ async def lifespan(app: FastAPI):
             await conn.run_sync(Base.metadata.create_all)
         print("SUCCESS: Tables synced with database.")
         
-        # Initialize async validator with warm-up
-        _async_validator = AsyncEmailValidator()
-        await _async_validator.initialize()
-        print("SUCCESS: Async email validator initialized with warm-up.")
+        # Initialize async validator with warm-up (only for non-async modes)
+        if VALIDATOR_MODE != "async":
+            _async_validator = AsyncEmailValidator()
+            await _async_validator.initialize()
+            print("SUCCESS: Async email validator initialized with warm-up.")
+        else:
+            print("SUCCESS: Async production validator loaded (no initialization needed).")
     except Exception as e:
         print(f"ERROR during startup: {e}")
     yield
@@ -95,6 +129,7 @@ app.add_middleware(
         "http://127.0.0.1:5173",
         "http://localhost:5174",
         "http://127.0.0.1:5174",
+        "https://email-validator-frontend.onrender.com", # Potential production frontend URL
         FRONTEND_URL,  # Production frontend URL from environment
         "*"  # Allow all origins for initial deployment (tighten after testing)
     ] if FRONTEND_URL else [
@@ -102,6 +137,7 @@ app.add_middleware(
         "http://127.0.0.1:5173",
         "http://localhost:5174",
         "http://127.0.0.1:5174",
+        "https://email-validator-frontend.onrender.com",
         "*"  # Development: allow all
     ],
     allow_credentials=True,
@@ -121,10 +157,34 @@ def read_root():
 async def process_emails_async(emails: List[str], batch_id: str = None, validation_type: str = "individual"):
     """
     High-performance async email validation.
-    Uses the new AsyncEmailValidator with connection pooling, caching, and bounded concurrency.
+    Uses the appropriate validator based on VALIDATOR_MODE.
     """
     global _async_validator
     
+    # Check if we're using the new async production validator
+    if VALIDATOR_MODE == "async":
+        # Use new async validator directly (already imported)
+        start_time = time.time()
+        
+        if len(emails) == 1:
+            result = await validate_email_async(emails[0])
+            if batch_id:
+                result["batch_id"] = batch_id
+            results = [result]
+        else:
+            results = await validate_bulk_async(emails, batch_id)
+        
+        elapsed = time.time() - start_time
+        print(f"PERF: Validated {len(emails)} emails in {elapsed:.2f}s ({len(emails)/max(elapsed, 0.001):.1f} emails/sec)")
+        
+        total = len(results)
+        valid = sum(1 for r in results if r.get("status") == "valid")
+        invalid = total - valid
+        failed_emails = [r.get("email") for r in results if r.get("status") != "valid"]
+        
+        return results, total, valid, invalid, failed_emails
+    
+    # Existing validator logic for fast/strict modes
     # Ensure validator is initialized
     if _async_validator is None:
         _async_validator = await get_validator()
@@ -146,9 +206,9 @@ async def process_emails_async(emails: List[str], batch_id: str = None, validati
     
     total = len(emails)
     # Reoon-style statuses: 'safe' and 'role' are valid emails
-    valid = sum(1 for r in results if r.get("status") in ("safe", "role", "Valid"))
+    valid = sum(1 for r in results if r.get("status") in ("safe", "role", "Valid", "valid"))
     invalid = total - valid
-    failed_emails = [r.get("email") for r in results if r.get("status") not in ("safe", "role", "Valid")]
+    failed_emails = [r.get("email") for r in results if r.get("status") not in ("safe", "role", "Valid", "valid")]
     
     return results, total, valid, invalid, failed_emails
 

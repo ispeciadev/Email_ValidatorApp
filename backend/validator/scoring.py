@@ -29,13 +29,13 @@ from typing import Dict, Any, Tuple
 # Based on ZeroBounce-style accuracy model
 
 SCORE_WEIGHTS = {
-    "syntax": 10,          # RFC 5322 compliant syntax
-    "domain_exists": 15,   # Domain has DNS records
-    "mx_valid": 20,        # MX records exist
-    "not_disposable": 10,  # Not a temporary email
-    "not_role_based": 10,  # Not a generic inbox (info@, support@)
-    "not_blacklisted": 15, # Domain not in blacklist
-    "smtp_verified": 30,   # SMTP handshake successful
+    "syntax": 15,           # Increased from 10 - syntax is critical
+    "domain_exists": 20,    # Increased from 15 - domain must exist
+    "mx_valid": 25,         # Increased from 20 - MX is strong signal
+    "not_disposable": 15,   # Increased from 10 - disposable is bad
+    "not_role_based": 10,   # Same - role-based is informational
+    "not_blacklisted": 15,  # Same - blacklist is important
+    "smtp_verified": 10,    # REDUCED from 30 - SMTP is weak signal
 }
 
 SCORE_PENALTIES = {

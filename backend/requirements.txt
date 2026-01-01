@@ -29,3 +29,4 @@ email-validator
 aiodns>=3.1.1
 aiosmtplib>=3.0.1
 cachetools>=5.3.0
+uvloop>=0.19.0
