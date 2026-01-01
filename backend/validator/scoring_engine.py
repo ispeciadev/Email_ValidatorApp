@@ -73,96 +73,75 @@ def classify_status(
     p2: Optional[Dict],
     p3: Optional[Dict],
     p4: Optional[Dict]
-) -> Tuple[str, str]:
+) -> Tuple[str, str, str]:
     """
-    Classify email status based on score and validation results
+    Classify email status based on 30 Dec logic.
+    Returns: (status, reason, sub_status)
     
-    Returns:
-        (status, sub_status) tuple
-        
-    Statuses:
-        - valid (90-100): High confidence deliverable
-        - risky (70-89): Possibly deliverable, use caution
-        - invalid (<70): Do not send
-        - unknown: Could not verify (timeout, temp failure)
-    
-    Sub-statuses match industry standards:
-        - mailbox_exists
-        - mailbox_not_found
-        - catch_all
-        - role_account
-        - disposable
-        - blacklisted
-        - timeout
-        - temporary
-        - no_mx
+    Statuses (UPPERCASE per 30 Dec):
+        - VALID
+        - RISKY
+        - INVALID
+        - NEUTRAL
     """
-    # Hard failures (immediate invalid)
+    # 1. HARD INVALID (immediate disqualification)
     if p1:
         if not p1.get("syntax_valid"):
-            return ("invalid", "invalid_syntax")
+            reason = p1["failures"][0] if p1.get("failures") else "Invalid syntax"
+            return ("INVALID", reason, "invalid_syntax")
         if p1.get("is_disposable"):
-            return ("invalid", "disposable")
+            return ("INVALID", "Disposable email address", "disposable")
         if p1.get("is_blacklisted"):
-            return ("invalid", "blacklisted")
+            return ("INVALID", "Blacklisted domain", "blacklisted")
     
     if p2:
         if not p2.get("mx_exists"):
-            return ("invalid", "no_mx")
-    
-    # SMTP-based classification
+            return ("INVALID", "No mail server found", "no_mx")
+            
+    # 2. SMTP FAILURES
     if p4:
         smtp_status = p4.get("smtp_status", "not_checked")
+        smtp_code = p4.get("smtp_code", 0)
         
-        # Timeout or error → UNKNOWN
-        if smtp_status in ["timeout", "error"]:
-            return ("unknown", smtp_status)
-        
-        # Temporary failure → UNKNOWN (NOT invalid!)
-        if smtp_status == "temporary":
-            return ("unknown", "temporary")
-        
-        # Mailbox not found → INVALID
-        if smtp_status == "mailbox_not_found":
-            return ("invalid", "mailbox_not_found")
-        
-        # Inbox full → RISKY (mailbox exists but full)
-        if smtp_status == "mailbox_full":
-            return ("risky", "mailbox_full")
-        
-        # Catch-all → RISKY (unverifiable)
+        if smtp_code in [550, 551, 553]:
+            return ("INVALID", "Mailbox does not exist", "mailbox_not_found")
+            
+        # NEVER VALID - always RISKY
         if p4.get("is_catch_all"):
-            return ("risky", "catch_all")
-        
-        # 250 OK → check score for final classification
-        if smtp_status == "accepted":
-            if score >= 90:
-                return ("valid", "mailbox_exists")
-            elif score >= 70:
-                return ("risky", "deliverable_low_score")
-            else:
-                return ("invalid", "low_quality")
-    
-    # Free provider without SMTP (trusted)
+            return ("RISKY", "Catch-all domain (unverifiable)", "catch_all")
+            
+        if smtp_status == "mailbox_full":
+            return ("RISKY", "Mailbox full or quota exceeded", "mailbox_full")
+            
+        # Role account detection (after catch-all/full)
+        if p1 and p1.get("is_role"):
+            return ("RISKY", "Role-based address", "role_account")
+            
+        # UNCERTAIN - NEUTRAL
+        if smtp_status == "timeout":
+            return ("NEUTRAL", "SMTP timeout – server did not respond", "timeout")
+            
+        if smtp_status == "temporary":
+            return ("NEUTRAL", "Temporary failure", "temporary_failure")
+            
+        if smtp_status == "error":
+            return ("NEUTRAL", "SMTP connection failed", "connection_error")
+            
+        # 3. DELIVERABLE (VALID)
+        if smtp_code == 250:
+            return ("VALID", "Deliverable", "mailbox_exists")
+            
+    # 4. FREE PROVIDERS (Trusted)
     if p3 and p3.get("is_free_provider"):
         if p2 and p2.get("mx_exists"):
             if p1 and p1.get("is_role"):
-                return ("risky", "role_account")
-            return ("valid", "free_provider")
-    
-    # Role account → RISKY
-    if p1 and p1.get("is_role"):
-        if score >= 70:
-            return ("risky", "role_account")
-        else:
-            return ("invalid", "role_account")
-    
-    # Score-based classification (fallback)
-    if score >= 90:
-        return ("valid", "high_quality")
-    elif score >= 70:
-        return ("risky", "medium_quality")
-    elif score >= 50:
-        return ("risky", "low_quality")
+                return ("RISKY", "Role-based address", "role_account")
+            return ("VALID", "Deliverable (trusted provider)", "free_provider")
+            
+    # Default fallback
+    if score >= 80:
+        return ("VALID", "High probability valid", "high_quality")
+    elif score >= 60:
+        return ("RISKY", "Passes basic checks but unverifiable", "unverifiable")
     else:
-        return ("invalid", "low_score")
+        return ("INVALID", "Validation failed", "unverifiable")

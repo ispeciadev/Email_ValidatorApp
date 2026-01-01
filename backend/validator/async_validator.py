@@ -445,43 +445,69 @@ def format_output(
     execution_ms: float
 ) -> Dict[str, Any]:
     """
-    Format validation result in industry-standard format (ZeroBounce/Reoon style)
+    Format validation result in 30 Dec compliant format (with legacy fields)
     """
     # Calculate total score
     total_score = 0
-    if p1:
-        total_score += p1.get("score", 0)
-    if p2:
-        total_score += p2.get("score", 0)
-    if p3:
-        total_score += p3.get("score", 0)
-    if p4:
-        total_score += p4.get("score", 0)
+    if p1: total_score += p1.get("score", 0)
+    if p2: total_score += p2.get("score", 0)
+    if p3: total_score += p3.get("score", 0)
+    if p4: total_score += p4.get("score", 0)
     
-    # Classify status based on score
-    status, sub_status = classify_status(total_score, p1, p2, p3, p4)
+    # Clamp 0-100
+    final_score = max(0, min(100, total_score))
     
-    # Build output
+    # Classify status (30 Dec logic)
+    status, reason, sub_status = classify_status(final_score, p1, p2, p3, p4)
+    
+    # Map status to legacy fields
+    is_valid = (status == "VALID")
+    
+    # Build complete output combining new and legacy fields
     output = {
         "email": email,
-        "status": status,  # valid | invalid | risky | unknown
-        "sub_status": sub_status,  # mailbox_exists | mailbox_not_found | catch_all | etc.
-        "score": max(0, min(100, total_score)),  # Clamp 0-100
+        "status": status,          # VALID, INVALID, RISKY, NEUTRAL
+        "reason": reason,
+        "sub_status": sub_status,
+        "score": final_score,
+        
+        # New Engine Fields
         "syntax_valid": p1.get("syntax_valid", False) if p1 else False,
         "mx_exists": p2.get("mx_exists", False) if p2 else False,
         "mx_provider": p2.get("provider", "unknown") if p2 else "unknown",
         "is_disposable": p1.get("is_disposable", False) if p1 else False,
-        "is_role": p1.get("is_role", False) if p1 else False,
+        "is_role_based": p1.get("is_role", False) if p1 else False,
+        "is_blacklisted": p1.get("is_blacklisted", False) if p1 else False,
         "is_catch_all": p4.get("is_catch_all", False) if p4 else False,
-        "is_free_provider": p3.get("is_free_provider", False) if p3 else False,
+        "is_free_email": p3.get("is_free_provider", False) if p3 else False,
+        "has_inbox_full": (sub_status == "mailbox_full"),
         "smtp_code": p4.get("smtp_code", 0) if p4 else 0,
         "smtp_status": p4.get("smtp_status", "not_checked") if p4 else "not_checked",
-        "execution_ms": round(execution_ms, 2)
+        "smtp_timeout": (sub_status == "timeout"),
+        
+        # Legacy Status Fields (30 Dec requirement)
+        "is_valid": is_valid,
+        "is_deliverable": is_valid,
+        "is_safe_to_send": (status == "VALID"),
+        "deliverability_score": final_score,
+        "verdict": status,
+        "execution_ms": round(execution_ms, 2),
+        
+        # UI Component Fields (30 Dec backend compatibility)
+        "regex": "Valid" if p1 and p1.get("syntax_valid") else "Not Valid",
+        "mx": "Valid" if p2 and p2.get("mx_exists") else "Not Valid",
+        "smtp": "Valid" if is_valid else "Not Valid",
+        "role_based": "Yes" if p1 and p1.get("is_role") else "No",
+        "disposable": "Yes" if p1 and p1.get("is_disposable") else "No",
+        "blacklist": "Yes" if p1 and p1.get("is_blacklisted") else "No",
+        "catch_all": "Yes" if p4 and p4.get("is_catch_all") else "No"
     }
     
-    # Legacy compatibility fields
-    output["is_valid"] = (status == "valid")
-    output["is_deliverable"] = (status == "valid")
-    output["deliverability_score"] = output["score"]
+    # Calculate Quality Grade
+    if final_score >= 90: output["quality_grade"] = "A"
+    elif final_score >= 80: output["quality_grade"] = "B"
+    elif final_score >= 60: output["quality_grade"] = "C"
+    elif final_score >= 40: output["quality_grade"] = "D"
+    else: output["quality_grade"] = "F"
     
     return output

@@ -25,13 +25,13 @@ if VALIDATOR_MODE == "async":
             result = await validate_email_async(emails[0])
             if batch_id:
                 result["batch_id"] = batch_id
-            return [result], 1, 1 if result["status"] == "valid" else 0, 0 if result["status"] == "valid" else 1, []
+            return [result], 1, 1 if result["status"] == "VALID" else 0, 0 if result["status"] == "VALID" else 1, []
         else:
             results = await validate_bulk_async(emails, batch_id)
             total = len(results)
-            valid = sum(1 for r in results if r.get("status") == "valid")
+            valid = sum(1 for r in results if r.get("status") == "VALID")
             invalid = total - valid
-            failed = [r["email"] for r in results if r.get("status") != "valid"]
+            failed = [r["email"] for r in results if r.get("status") != "VALID"]
             return results, total, valid, invalid, failed
     
     # Use the wrapper
@@ -178,9 +178,9 @@ async def process_emails_async(emails: List[str], batch_id: str = None, validati
         print(f"PERF: Validated {len(emails)} emails in {elapsed:.2f}s ({len(emails)/max(elapsed, 0.001):.1f} emails/sec)")
         
         total = len(results)
-        valid = sum(1 for r in results if r.get("status") == "valid")
+        valid = sum(1 for r in results if r.get("status") == "VALID")
         invalid = total - valid
-        failed_emails = [r.get("email") for r in results if r.get("status") != "valid"]
+        failed_emails = [r.get("email") for r in results if r.get("status") != "VALID"]
         
         return results, total, valid, invalid, failed_emails
     
