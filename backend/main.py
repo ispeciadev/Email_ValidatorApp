@@ -21,17 +21,19 @@ if VALIDATOR_MODE == "async":
     
     # Wrapper to match existing interface
     async def process_emails_async_wrapper(emails, batch_id=None, validation_type="individual"):
+        valid_statuses = ("valid", "role")
         if len(emails) == 1:
             result = await validate_email_async(emails[0])
             if batch_id:
                 result["batch_id"] = batch_id
-            return [result], 1, 1 if result["status"] == "VALID" else 0, 0 if result["status"] == "VALID" else 1, []
+            is_valid = result["status"] in valid_statuses
+            return [result], 1, 1 if is_valid else 0, 0 if is_valid else 1, []
         else:
             results = await validate_bulk_async(emails, batch_id)
             total = len(results)
-            valid = sum(1 for r in results if r.get("status") == "VALID")
+            valid = sum(1 for r in results if r.get("status") in valid_statuses)
             invalid = total - valid
-            failed = [r["email"] for r in results if r.get("status") != "VALID"]
+            failed = [r["email"] for r in results if r.get("status") not in valid_statuses]
             return results, total, valid, invalid, failed
     
     # Use the wrapper

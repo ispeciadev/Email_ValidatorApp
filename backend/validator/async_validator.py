@@ -1,3 +1,52 @@
+import asyncio
+import time
+from typing import Dict, Any, List, Optional
+from email_validator import validate_email as validate_email_syntax, EmailNotValidError
+
+from .dns_cache import DNSCache
+from .smtp_pool import SMTPConnectionPool
+
+from pathlib import Path
+
+# Global Instances & Concurrency Control
+dns_cache = DNSCache()
+smtp_pools: Dict[str, SMTPConnectionPool] = {}
+smtp_semaphore = asyncio.Semaphore(150)  # Max concurrent SMTP checks
+worker_semaphore = asyncio.Semaphore(500) # Max total concurrent validation tasks
+MAX_CONNECTIONS_PER_DOMAIN = 3
+TOTAL_EMAIL_TIMEOUT = 12.0 # Max time for a single email validation
+
+# Constants (Architect Intelligence)
+FREE_PROVIDERS = {
+    "gmail.com", "googlemail.com", "google.com",
+    "outlook.com", "hotmail.com", "live.com", "msn.com",
+    "yahoo.com", "yahoo.co.uk", "yahoo.co.in", "ymail.com",
+    "icloud.com", "me.com", "mac.com", "aol.com"
+}
+
+ROLE_ACCOUNTS = {
+    "admin", "support", "help", "info", "sales", "contact", "billing", "hr", "dev",
+    "webmaster", "postmaster", "hostmaster", "root", "sysadmin"
+}
+
+def load_domain_list(filename: str) -> set:
+    """Load domain list from file (O(1) lookup)"""
+    filepath = Path(__file__).parent / filename
+    domains = set()
+    try:
+        if filepath.exists():
+            with open(filepath, 'r', encoding='utf-8') as f:
+                for line in f:
+                    line = line.strip().lower()
+                    if line and not line.startswith('#'):
+                        domains.add(line)
+    except Exception: pass
+    return domains
+
+# These are O(1) lookups for disposal and blacklist checks
+DISPOSABLE_DOMAINS = load_domain_list('disposable_domains.txt')
+BLACKLIST_DOMAINS = load_domain_list('blacklist_domains.txt')
+
 # Provider behavior table (Principal Architect Constraints)
 PROVIDER_RULES = {
     "google": {
