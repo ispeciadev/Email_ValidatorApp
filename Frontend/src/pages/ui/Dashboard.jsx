@@ -510,12 +510,28 @@ const Dashboard = () => {
                         </svg>
                       </button>
 
-                      <div className="inline-flex items-center justify-center w-20 h-20 rounded-full bg-green-100 mb-3">
-                        <svg className="w-10 h-10 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                        </svg>
+                      <div className={`inline-flex items-center justify-center w-20 h-20 rounded-full mb-3 ${
+                        singleResult.status === 'valid' ? 'bg-green-100' : 
+                        singleResult.status === 'risky' ? 'bg-yellow-100' : 'bg-red-100'
+                      }`}>
+                        {singleResult.status === 'valid' ? (
+                          <svg className="w-10 h-10 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                          </svg>
+                        ) : singleResult.status === 'risky' ? (
+                          <svg className="w-10 h-10 text-yellow-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                          </svg>
+                        ) : (
+                          <svg className="w-10 h-10 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                          </svg>
+                        )}
                       </div>
-                      <h2 className="text-3xl font-bold text-gray-800 uppercase tracking-wide">
+                      <h2 className={`text-3xl font-bold uppercase tracking-wide ${
+                        singleResult.status === 'valid' ? 'text-green-600' : 
+                        singleResult.status === 'risky' ? 'text-yellow-600' : 'text-red-600'
+                      }`}>
                         {singleResult.status || 'VALIDATION RESULT'}
                       </h2>
                     </div>
@@ -531,10 +547,9 @@ const Dashboard = () => {
                         <div className="flex justify-between py-2 border-b border-gray-100">
                           <span className="font-semibold text-gray-600">status:</span>
                           <span className={`font-medium italic ${
-                            (singleResult.status === 'valid' || singleResult.status === 'role') ? 'text-green-600' :
-                            (singleResult.status === 'invalid' || singleResult.status === 'disposable' || singleResult.status === 'spamtrap') ? 'text-red-600' :
-                            (singleResult.status === 'catch_all' || singleResult.status === 'inbox_full') ? 'text-yellow-600' : 'text-blue-600'
-                          }`}>{singleResult.status || 'unknown'}</span>
+                            singleResult.status === 'valid' ? 'text-green-600' :
+                            singleResult.status === 'risky' ? 'text-yellow-600' : 'text-red-600'
+                          }`}>{singleResult.status || 'risky'}</span>
                         </div>
 
                         <div className="flex justify-between py-2 border-b border-gray-100">
@@ -944,14 +959,13 @@ const Dashboard = () => {
                           <Pie
                             data={[
                               { name: "Safe (Valid)", value: selectedBulkTask.safe || 0, color: "#22c55e" },
-                              { name: "Role (Valid)", value: selectedBulkTask.role || 0, color: "#84cc16" },
+                              { name: "Role-based", value: selectedBulkTask.role || 0, color: "#84cc16" },
                               { name: "Catch All", value: selectedBulkTask.catch_all || 0, color: "#eab308" },
                               { name: "Disposable", value: selectedBulkTask.disposable || 0, color: "#f59e0b" },
                               { name: "Inbox Full", value: selectedBulkTask.inbox_full || 0, color: "#fb923c" },
-                              { name: "Spam Trap", value: selectedBulkTask.spam_trap || 0, color: "#f97316" },
                               { name: "Disabled", value: selectedBulkTask.disabled || 0, color: "#ef4444" },
                               { name: "Invalid", value: selectedBulkTask.invalid || 0, color: "#dc2626" },
-                              { name: "Unknown", value: selectedBulkTask.unknown || 0, color: "#9ca3af" },
+                              { name: "Risky", value: selectedBulkTask.unknown || 0, color: "#f97316" },
                             ]}
                             dataKey="value"
                             nameKey="name"
@@ -962,14 +976,13 @@ const Dashboard = () => {
                           >
                             {[
                               { name: "Safe (Valid)", value: selectedBulkTask.safe || 0, color: "#22c55e" },
-                              { name: "Role (Valid)", value: selectedBulkTask.role || 0, color: "#84cc16" },
+                              { name: "Role-based", value: selectedBulkTask.role || 0, color: "#84cc16" },
                               { name: "Catch All", value: selectedBulkTask.catch_all || 0, color: "#eab308" },
                               { name: "Disposable", value: selectedBulkTask.disposable || 0, color: "#f59e0b" },
                               { name: "Inbox Full", value: selectedBulkTask.inbox_full || 0, color: "#fb923c" },
-                              { name: "Spam Trap", value: selectedBulkTask.spam_trap || 0, color: "#f97316" },
                               { name: "Disabled", value: selectedBulkTask.disabled || 0, color: "#ef4444" },
                               { name: "Invalid", value: selectedBulkTask.invalid || 0, color: "#dc2626" },
-                              { name: "Unknown", value: selectedBulkTask.unknown || 0, color: "#9ca3af" },
+                              { name: "Risky", value: selectedBulkTask.unknown || 0, color: "#f97316" },
                             ].map((entry, index) => (
                               <Cell key={`cell-${index}`} fill={entry.color} />
                             ))}
@@ -999,14 +1012,13 @@ const Dashboard = () => {
                       <div className="flex flex-col gap-2 text-sm">
                         {[
                           { name: "Safe (Valid)", value: selectedBulkTask.safe || 0, color: "#22c55e" },
-                          { name: "Role (Valid)", value: selectedBulkTask.role || 0, color: "#84cc16" },
+                          { name: "Role-based", value: selectedBulkTask.role || 0, color: "#84cc16" },
                           { name: "Catch All", value: selectedBulkTask.catch_all || 0, color: "#eab308" },
                           { name: "Disposable", value: selectedBulkTask.disposable || 0, color: "#f59e0b" },
                           { name: "Inbox Full", value: selectedBulkTask.inbox_full || 0, color: "#fb923c" },
-                          { name: "Spam Trap", value: selectedBulkTask.spam_trap || 0, color: "#f97316" },
                           { name: "Disabled", value: selectedBulkTask.disabled || 0, color: "#ef4444" },
                           { name: "Invalid", value: selectedBulkTask.invalid || 0, color: "#dc2626" },
-                          { name: "Unknown", value: selectedBulkTask.unknown || 0, color: "#9ca3af" },
+                          { name: "Risky", value: selectedBulkTask.unknown || 0, color: "#f97316" },
                         ].map((item, index) => (
                           <div key={index} className="flex items-center gap-2">
                             <div

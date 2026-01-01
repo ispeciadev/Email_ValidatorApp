@@ -32,6 +32,7 @@ if VALIDATOR_MODE == "async":
             results = await validate_bulk_async(emails, batch_id)
             total = len(results)
             valid = sum(1 for r in results if r.get("status") in valid_statuses)
+            # risky is counted separately or as invalid depending on UI, but for basic count:
             invalid = total - valid
             failed = [r["email"] for r in results if r.get("status") not in valid_statuses]
             return results, total, valid, invalid, failed
@@ -432,20 +433,23 @@ async def validate_emails(
                 
                 # Calculate detailed category counts for visualization (Status-driven)
                 safe_count = role_count = catch_all_count = disposable_count = 0
-                inbox_full_count = spam_trap_count = disabled_count = invalid_count = unknown_count = 0
+                inbox_full_count = spam_trap_count = disabled_count = invalid_count = risky_count = 0
                 
                 # Status-driven aggregation (Principal Architect Rule)
                 for r in results:
-                    status = r.get("status", "unknown")
+                    status = r.get("status", "invalid")
+                    sub_status = r.get("sub_status", "none")
+                    
                     if status == "valid": safe_count += 1
-                    elif status == "role": role_count += 1
-                    elif status == "catch_all": catch_all_count += 1
-                    elif status == "disposable": disposable_count += 1
-                    elif status == "inbox_full": inbox_full_count += 1
-                    elif status == "spamtrap": spam_trap_count += 1
-                    elif status == "disabled": disabled_count += 1
+                    elif status == "role" or sub_status == "role_based": role_count += 1
+                    elif status == "catch_all" or sub_status == "catchall": catch_all_count += 1
+                    elif status == "disposable" or sub_status == "disposable": disposable_count += 1
+                    elif sub_status == "mailbox_full": inbox_full_count += 1
+                    elif sub_status == "spamtrap": spam_trap_count += 1
+                    elif sub_status == "disabled": disabled_count += 1
                     elif status == "invalid": invalid_count += 1
-                    else: unknown_count += 1
+                    elif status == "risky": risky_count += 1
+                    else: risky_count += 1 # Default fallback for uncertainty
 
                 
                 
@@ -481,10 +485,9 @@ async def validate_emails(
                     "catch_all": catch_all_count,
                     "disposable": disposable_count,
                     "inbox_full": inbox_full_count,
-                    "spam_trap": spam_trap_count,
+                    "risky": risky_count,
                     "disabled": disabled_count,
                     "invalid": invalid_count,
-                    "unknown": unknown_count,
                     "validated_download": f"/download/{validated_filename}",
                     "credits_remaining": current_user.credits,
                     "batch_id": batch_id
@@ -506,7 +509,7 @@ async def validate_emails(
                     spam_trap_count=spam_trap_count,
                     disabled_count=disabled_count,
                     invalid_count=invalid_count,
-                    unknown_count=unknown_count,
+                    unknown_count=risky_count, # Map risky to unknown field in DB
                     download_url=f"/download/{validated_filename}",
                     completed_at=datetime.utcnow()
                 )
@@ -841,13 +844,13 @@ async def update_user(data: UserUpdate, db: AsyncSession = Depends(get_db)):
 @app.get("/summary")
 async def get_summary(db: AsyncSession = Depends(get_db)):
     total = await db.scalar(select(func.count()).select_from(EmailRecord))
-    valid = await db.scalar(select(func.count()).select_from(EmailRecord).where(EmailRecord.status == "Valid"))
+    valid = await db.scalar(select(func.count()).select_from(EmailRecord).where(EmailRecord.status.in_(["Valid", "valid"])))
     return {"total_uploads": total, "valid_emails": valid, "invalid_emails": total - valid}
 
 @app.get("/admin/email-stats")
 async def get_email_stats(db: AsyncSession = Depends(get_db)):
     total = await db.scalar(select(func.count()).select_from(EmailRecord))
-    valid = await db.scalar(select(func.count()).select_from(EmailRecord).where(EmailRecord.status == "Valid"))
+    valid = await db.scalar(select(func.count()).select_from(EmailRecord).where(EmailRecord.status.in_(["Valid", "valid"])))
     return {"counts": {"total": total, "valid": valid, "invalid": total - valid}}
 
 @app.get("/user/all-emails")

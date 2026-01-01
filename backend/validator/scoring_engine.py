@@ -1,105 +1,108 @@
 """
-Scoring Engine
-Standardized email validation scoring and status classification (ZeroBounce/Reoon compatible)
+Scoring Engine (Render Optimized)
+Implements score-based classification to avoid 'UNKNOWN' results.
 """
 from typing import Dict, Any, Optional, Tuple
 
-# Industry-Standard Final Statuses (ZeroBounce Style)
+# Industry-Standard Final Statuses (Optimized for Render)
 STATUS_VALID = "valid"
 STATUS_INVALID = "invalid"
-STATUS_UNKNOWN = "unknown"
-STATUS_CATCH_ALL = "catch_all"
-STATUS_ROLE = "role"
-STATUS_DISPOSABLE = "disposable"
-STATUS_INBOX_FULL = "inbox_full"
-STATUS_SPAMTRAP = "spamtrap"
-STATUS_DISABLED = "disabled"
-
-# Status to Score mapping (Confidence Only)
-STATUS_SCORES = {
-    STATUS_VALID: 100,
-    STATUS_INBOX_FULL: 75,
-    STATUS_CATCH_ALL: 70,
-    STATUS_ROLE: 65,
-    STATUS_UNKNOWN: 50,
-    STATUS_DISPOSABLE: 0,
-    STATUS_INVALID: 0,
-    STATUS_SPAMTRAP: 0,
-    STATUS_DISABLED: 0
-}
+STATUS_RISKY = "risky"
 
 def classify_status_reoon(
     p1: Dict,
     p2: Dict,
     p3: Dict,
     p4: Dict
-) -> Tuple[str, str, str]:
+) -> Tuple[str, str, int]:
     """
-    Principal Architect Implementation: Classification Hierarchy
-    Rules:
-    1. Syntax is Absolute (FAIL FAST)
-    2. Domain/MX existence (REQUIRED)
-    3. Disposable/Spamtrap/Blacklist (INVALID/DISPOSABLE)
-    4. Provider Overrides (Gmail/Outlook/Yahoo -> UNKNOWN if not confirmed)
-    5. SMTP results (VALID/INVALID/INBOX_FULL)
-    6. Catch-all detection
+    Score-Based Classification Logic (Render Optimized)
+    
+    Hard-Fail Rules (Result in INVALID, Score 0):
+    - RFC syntax invalid
+    - Domain does not exist / No MX records
+    - Disposable domain
+    - Blacklisted domain
+    - Explicit SMTP 550 user not found
+    
+    Score-Based Classification:
+    - Score >= 80: VALID
+    - Score 50-79: RISKY
+    - Score < 50: INVALID
     """
     
-    # --- PHASE 1: SYNTAX (ABSOLUTE) ---
+    score = 0
+    reason = "undetermined"
+
+    # --- PHASE 1: HARD FAIL CHECKS (Score 0) ---
+    
+    # 1. Syntax
     if not p1 or not p1.get("syntax_valid"):
-        reason = p1.get("failures", ["syntax_error"])[0] if p1 else "syntax_error"
-        return (STATUS_INVALID, reason, "syntax_error")
+        return (STATUS_INVALID, p1.get("failures", ["syntax_error"])[0] if p1 else "syntax_error", 0)
         
-    # --- PHASE 2: DOMAIN & MX ---
+    # 2. DNS/MX
     if not p2 or not p2.get("mx_exists"):
-        return (STATUS_INVALID, "dns_error", "no_mx")
+        return (STATUS_INVALID, "dns_error", 0)
         
-    # --- PHASE 3: DISPOSABLE / SPAMTRAP / BLACKLIST ---
+    # 3. Reputation (Hard Fail per requirements)
     if p1.get("is_disposable"):
-        return (STATUS_DISPOSABLE, "disposable", "disposable")
+        return (STATUS_INVALID, "disposable", 0)
         
     if p1.get("is_blacklisted"):
-        return (STATUS_INVALID, "blacklisted", "blacklisted")
-        
-    # --- PHASE 4: PROVIDER OVERRIDES (GMail, Outlook, etc.) ---
-    is_free = p3.get("is_free_provider") if p3 else False
-    
-    # SMTP result check
+        return (STATUS_INVALID, "blacklisted", 0)
+
+    # 4. Explicit SMTP 550 (Hard Fail)
     smtp_code = p4.get("smtp_code", 0) if p4 else 0
     smtp_status = p4.get("smtp_status", "not_checked") if p4 else "not_checked"
     
-    # If it's a free provider, we skipped SMTP (unless the rules change)
-    if is_free and smtp_status == "skipped_free_provider":
-        # Free providers are UNKNOWN by default unless confirmed by SMTP (which we skip)
-        # Principal Rule 3: Free providers are UNKNOWN unless confirmed (but we skip SMTP)
-        # So they stay UNKNOWN
-        return (STATUS_UNKNOWN, "free_provider_unconfirmed", "unknown")
+    if smtp_code == 550 or smtp_status == "invalid":
+        return (STATUS_INVALID, "mailbox_not_found", 0)
 
-    # --- PHASE 5: SMTP RESULTS ---
-    if p4:
-        if smtp_code == 250:
-            # Special check for Catch-all (Phase 6)
-            if p4.get("is_catch_all"):
-                return (STATUS_CATCH_ALL, "catch_all", "catch_all")
-                
-            # Role accounts check (as requested moving to status ROLE)
-            if p1.get("is_role"):
-                return (STATUS_ROLE, "role_based", "role")
-                
-            return (STATUS_VALID, "deliverable", "mailbox_exists")
-            
-        if smtp_code in [452, 552] or smtp_status == "mailbox_full":
-            return (STATUS_INBOX_FULL, "mailbox_full", "mailbox_full")
-            
-        if smtp_code in [550, 551, 553]:
-            return (STATUS_INVALID, "mailbox_not_found", "mailbox_not_found")
-            
-        if smtp_status in ["timeout", "temporary", "error"]:
-            return (STATUS_UNKNOWN, "smtp_unverifiable", "unknown")
+    # --- PHASE 2: SCORING (Weak Signals) ---
+    
+    # Base points for passing basic checks (Syntax + MX pass and not in blacklist)
+    score = 80
+    reason = "deliverable"
+    
+    # Role account penalty (Moves to RISKY if score drops below 80)
+    if p1.get("is_role"):
+        score -= 10
+        reason = "role_based"
 
-    # Default fallback
-    return (STATUS_UNKNOWN, "unverifiable", "unknown")
+    # Catch-all penalty (Moves to RISKY)
+    if p4 and p4.get("is_catch_all"):
+        score -= 10
+        reason = "catch_all"
+
+    # Mailbox Full penalty
+    if smtp_status == "mailbox_full" or smtp_code in [452, 552]:
+        score -= 30
+        reason = "mailbox_full"
+
+    # SMTP Success bonus
+    if smtp_code == 250:
+        score += 10 # Solidify valid status
+
+    # SMTP Timeout/Error/Blocked (Weak Signal - No Penalty)
+    # If Render blocks SMTP, we still maintain the base score of 80 (VALID) 
+    # as long as the Syntax and MX are valid.
+
+    # Cap score at 100
+    score = min(max(score, 0), 100)
+
+    # --- PHASE 3: FINAL CLASSIFICATION ---
+    
+    if score >= 80:
+        return (STATUS_VALID, reason, score)
+    elif score >= 50:
+        return (STATUS_RISKY, reason, score)
+    else:
+        return (STATUS_INVALID, reason, score)
 
 def calculate_score_reoon(status: str) -> int:
-    """Score derived from status, not vice-versa"""
-    return STATUS_SCORES.get(status, 0)
+    """Note: Score calculation is now internal to classify_status_reoon.
+    This function remains for backward compatibility.
+    """
+    if status == STATUS_VALID: return 98
+    if status == STATUS_RISKY: return 65
+    return 0

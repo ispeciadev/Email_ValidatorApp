@@ -244,17 +244,16 @@ async def validate_email_async(email: str) -> Dict[str, Any]:
 # ======================= FINAL RESPONSE OBJECT (EXACT FORMAT) =======================
 
 def format_output_architect(email, p1, p2, p3, p4, ms) -> Dict[str, Any]:
-    """ZeroBounce-style output format with status-driven scoring"""
-    from .scoring_engine import classify_status_reoon, calculate_score_reoon
+    """ZeroBounce-style output format with score-based classification"""
+    from .scoring_engine import classify_status_reoon
     
-    status, reason, sub_status = classify_status_reoon(p1, p2, p3, p4)
-    score = calculate_score_reoon(status)
+    status, reason, score = classify_status_reoon(p1, p2, p3, p4)
     
     # Required Format
     res = {
         "email": email,
-        "status": status,      # valid, invalid, unknown, etc.
-        "sub_status": reason,  # reason maps to sub_status in ZeroBounce
+        "status": status,      # valid, invalid, risky
+        "sub_status": reason,  # more detailed reason
         "score": score,
         "checks": {
             "syntax": p1["syntax_valid"] if p1 else False,
@@ -263,7 +262,7 @@ def format_output_architect(email, p1, p2, p3, p4, ms) -> Dict[str, Any]:
             "smtp": p4["smtp_status"] if p4 else "not_checked",
             "catch_all": p4["is_catch_all"] if p4 else False
         },
-        "safe_to_send": (status in ["valid", "role", "catch_all"]), # Adjusted safety logic
+        "safe_to_send": (status == "valid"),
         "execution_ms": round(ms, 2)
     }
     
@@ -275,6 +274,7 @@ def format_output_architect(email, p1, p2, p3, p4, ms) -> Dict[str, Any]:
         "is_disposable": p1.get("is_disposable") if p1 else False,
         "is_role_account": p1.get("is_role") if p1 else False,
         "is_free_email": p3.get("is_free_provider") if p3 else False,
+        "is_disabled": reason == "disabled",
         "regex": "Valid" if p1 and p1["syntax_valid"] else "Not Valid",
         "mx_record_exists": "Valid" if p2 and p2["mx_exists"] else "Not Valid",
         "smtp_valid": "Valid" if status == "valid" else "Not Valid",
